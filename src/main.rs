@@ -1,6 +1,8 @@
 // herdr-configurable-picker — stub entry point.
 // Actual TUI implementation is tracked in SPEC.md.
 
+mod keymap;
+
 fn main() {
     eprintln!(
         "herdr-configurable-picker is not implemented yet.\n\
