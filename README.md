@@ -14,54 +14,52 @@ This plugin binds to a separate key and lets you rebind every action — `up`, `
 
 ## Status
 
-**Design phase.** Manifest, spec, and repository scaffolding are in place. Implementation is not started. See [SPEC.md](./SPEC.md) for the full design.
+**v0.1 (M1, MVP): flat tab list with fully configurable keys.** Tree view (M2) and search (M3) are next; see [SPEC.md](./SPEC.md#milestones) for the roadmap and full design.
 
-## Planned features (v0.1)
+## Features
 
-- Tree of `workspace → tab → pane`, matching herdr's built-in goto information model.
+- Flat list of tabs across all workspaces (tree of `workspace → tab → pane` lands in M2).
 - No external runtime dependencies (single Rust binary; TUI via [`ratatui`](https://ratatui.rs/)).
 - All keys user-configurable, including chords like `g g`.
-- Optional expand / collapse per branch.
-- Substring search that keeps ancestors of matches visible.
+- Talks directly to herdr's API socket — no subprocess per call.
 
-Milestones and open questions are tracked in [SPEC.md](./SPEC.md#milestones).
-
-## Install (planned)
+## Install
 
 ```bash
 herdr plugin install yoshiori/herdr-configurable-picker
 ```
 
-Then bind a key in your herdr config (the exact `type` will be finalized once M1 is verified against herdr's `keys.command` API — see SPEC Open Question #2):
+Then bind a key in your herdr config. The plugin ships an `open` action (herdr keybindings can trigger plugin actions, not panes) that opens the picker overlay:
 
 ```toml
 [[keys.command]]
 key = "prefix+alt+g"
 type = "plugin_action"
-command = "yoshiori.herdr-configurable-picker.picker"
+command = "yoshiori.herdr-configurable-picker.open"
 description = "configurable goto picker"
 ```
 
-## Plugin config (planned)
+## Plugin config
 
-Written to `$HERDR_PLUGIN_CONFIG_DIR/config.toml` on first run. Every key is bindable:
+Written to `$HERDR_PLUGIN_CONFIG_DIR/config.toml` on first run. Every key is bindable (multiple keys per action; chords like `"g g"` work):
 
 ```toml
 [keys]
-down     = ["down", "ctrl+n", "j"]
-up       = ["up", "ctrl+p", "k"]
-expand   = ["right", "l"]
-collapse = ["left", "h"]
-accept   = ["enter"]
-cancel   = ["esc", "ctrl+c"]
-search_start = ["/"]
+down      = ["down", "ctrl+n", "j"]
+up        = ["up", "ctrl+p", "k"]
+page_down = ["ctrl+d", "pagedown"]
+page_up   = ["ctrl+u", "pageup"]
+top       = ["home"]
+bottom    = ["end", "shift+g"]
+accept    = ["enter"]
+cancel    = ["esc", "ctrl+c", "ctrl+g"]
 ```
 
-Full config schema in [SPEC.md](./SPEC.md#plugin-config).
+Broken or conflicting keys are disabled with a warning (also logged to `$HERDR_PLUGIN_STATE_DIR/picker.log`); the rest keep working. Full config schema in [SPEC.md](./SPEC.md#plugin-config-herdr_plugin_config_dirconfigtoml).
 
 ## Development
 
-Requires Rust 1.75+.
+Requires Rust 1.85+.
 
 ```bash
 cargo build --release --locked

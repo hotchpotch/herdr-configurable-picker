@@ -42,6 +42,12 @@ platforms = ["linux", "macos"]
 [[build]]
 command = ["cargo", "build", "--release", "--locked"]
 
+[[actions]]
+id = "open"
+title = "Open goto picker"
+description = "Open the configurable goto picker in an overlay pane"
+command = ["sh", "-c", "exec \"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin yoshiori.herdr-configurable-picker --entrypoint picker"]
+
 [[panes]]
 id = "picker"
 title = "Goto"
@@ -49,27 +55,23 @@ placement = "overlay"
 command = ["target/release/herdr-configurable-picker"]
 ```
 
+**The `open` action** exists because herdr keybindings cannot open plugin panes directly (see "User keybinding" below). Action argv is exec'd raw with no env-var expansion (`plugin_command.rs`), hence the `sh -c` wrapper; the `${HERDR_BIN_PATH:-herdr}` default falls back to a `PATH` lookup if the recorded binary path ever goes stale (e.g. hot-swapped server binary).
+
 **`placement = "overlay"`**: matches the built-in goto's UX (centered popup, restores prior focus/zoom on close). `split` would leave a stray pane behind if the user is not careful.
 
 **Windows in v0.1**: excluded from platforms. `ratatui` supports Windows fine, but we defer testing to v0.2.
 
 ## User keybinding (in herdr's config, not this plugin's)
 
-Two paths depending on what herdr's `[[keys.command]]` supports for opening plugin panes:
+Verified against herdr source: `[[keys.command]]` supports `type = "shell" | "pane" | "plugin_action"`, and `plugin_action` resolves manifest **actions only** — a keybinding cannot open a plugin pane directly. The plugin therefore declares an `open` action (see Manifest above) that runs `plugin pane open`, and the user binds that action:
 
-**Path A — if `type = "plugin_action"` can open a plugin pane directly:**
 ```toml
 [[keys.command]]
 key = "prefix+alt+g"
 type = "plugin_action"
-command = "yoshiori.herdr-configurable-picker.picker"
+command = "yoshiori.herdr-configurable-picker.open"
 description = "configurable goto picker"
 ```
-
-**Path B (fallback) — if only actions (not panes) can be bound:**
-The plugin declares an action `open` that internally calls `$HERDR_BIN_PATH plugin pane open --plugin yoshiori.herdr-configurable-picker --entrypoint picker`, and the user binds to that action.
-
-The install docs will show whichever path is actually supported. See Open Question #2.
 
 ## Plugin config (`$HERDR_PLUGIN_CONFIG_DIR/config.toml`)
 
@@ -130,8 +132,15 @@ Mirrors herdr's own binding syntax:
 
 - Each action can be bound to multiple keys (array form).
 - If two actions bind the same key, the earlier entry in the `[keys]` table wins.
-- Config validator (run at plugin startup) prints warnings to stderr for conflicts and unknown modifiers, but does not fail — a broken key is disabled, the rest still work.
+- Config validator (run at plugin startup) prints warnings to stderr for conflicts and unknown modifiers, but does not fail — a broken key is disabled, the rest still work. Warnings are also appended to `$HERDR_PLUGIN_STATE_DIR/picker.log`, because stderr vanishes with the overlay.
 - Search mode has its own key table (`search_*`); when search is focused, normal-mode movement/accept/cancel keys are re-routed only through the search table.
+
+### Chord policy
+
+- **No timeout.** The event loop blocks on the next key; a pending chord resolves whenever the next key arrives.
+- A key that mismatches the pending chord is **swallowed** (pending cleared, no action) — firing its standalone binding instead would give one keypress two meanings.
+- `esc` during a pending chord clears the chord; it does not cancel the picker.
+- A chord whose strict prefix is itself a complete binding can never fire (the prefix resolves immediately); it is disabled with a startup warning.
 
 ## UI layout
 
@@ -161,13 +170,26 @@ Rendered inside the overlay pane herdr spawns. We do **not** read the outer term
 
 ## Data model
 
-Populated on open by calling herdr JSON APIs via `$HERDR_BIN_PATH`:
+Populated on open by talking **directly to herdr's API socket** (newline-delimited JSON over `$HERDR_SOCKET_PATH`) — not by shelling out to the CLI. The CLI's JSON output is just the raw socket response printed, so the parsed shapes are identical, but the socket gives us: no subprocess per call, no dependence on `$HERDR_BIN_PATH` staying valid, and access to socket-only methods (`pane.focus`) the CLI does not expose.
 
-- `workspace list` → workspace `id`, `label`, `number`, `agent_status`.
-- `tab list`       → tab `id`, `workspace_id`, `label`, `number`, `pane_count`, `agent_status`, `focused`.
-- `pane list`      → pane `id`, `tab_id`, `workspace_id`, `agent`, `agent_status`, `cwd`, `focused`, `terminal_id`.
+Env contract (set by herdr on plugin pane processes):
 
-Note: the herdr CLI already emits JSON by default for these subcommands (no `--json` flag needed). Verify at implementation time that this remains stable.
+| Variable | Use |
+| --- | --- |
+| `HERDR_SOCKET_PATH` | API socket. Missing ⇒ not inside herdr ⇒ exit 2 with a hint. |
+| `HERDR_PLUGIN_CONFIG_DIR` | `config.toml` location (seeded on first run). |
+| `HERDR_PLUGIN_STATE_DIR` | `picker.log` for warnings (stderr vanishes with the overlay). |
+| `HERDR_PLUGIN_CONTEXT_JSON` | invocation context; `tab_id` seeds the initial cursor. |
+
+Wire protocol: one request line, one response line.
+
+```
+-> {"id":"1","method":"tab.list","params":{}}
+<- {"id":"1","result":{"type":"tab_list","tabs":[...]}}
+<- {"id":"1","error":{"code":"tab_not_found","message":"..."}}
+```
+
+`params` must always be present (herdr's Method enum is serde tag/content). Methods used: `workspace.list`, `tab.list`, `workspace.focus`, `tab.focus` (M1); `pane.list`, `pane.focus` (M2). IDs are strings: `w1`, `w1:t1`, `w1:p1`. Unknown response fields are ignored (serde default), so herdr adding fields is not a breaking change; the result `type` tag is checked before deserializing so drift fails with a clear error.
 
 Merged in memory into:
 
@@ -180,18 +202,16 @@ struct Pane      { id, tab_id, workspace_id, agent: Option<String>,
 ```
 
 - **Snapshot semantics**: fetched once when the picker opens. No live subscription. Reopen for a fresh view.
-- **HERDR_BIN_PATH deleted-inode fallback**: if `$HERDR_BIN_PATH` is not executable, fall back to `PATH` lookup for `herdr`. (Verified failure mode when the server binary was hot-swapped: env var still holds the pre-swap path with `(deleted)` suffix.)
 
 ## Focus / jump behavior
 
-Selecting a node calls the appropriate herdr CLI subcommand:
+Selecting a node sends the matching socket method:
 
-| Node type              | Command                              | Notes                                                        |
-| ---------------------- | ------------------------------------ | ------------------------------------------------------------ |
-| Workspace              | `herdr workspace focus <ws_id>`      | Always works. Lands on the workspace's focused tab & pane.   |
-| Tab                    | `herdr tab focus <tab_id>`           | Always works. Lands on the tab's focused pane.               |
-| Pane with agent        | `herdr agent focus <pane_id>`        | Direct pane focus. Verified working via CLI.                 |
-| Pane without agent     | `herdr tab focus <tab_id>` fallback  | herdr's CLI exposes no `pane.focus <pane_id>` for agentless panes. See Open Question #4. |
+| Node type | Method | Notes |
+| --------- | ------ | ----- |
+| Workspace | `workspace.focus {workspace_id}` | Lands on the workspace's focused tab & pane. |
+| Tab       | `tab.focus {tab_id}`             | Lands on the tab's focused pane. |
+| Pane      | `pane.focus {pane_id}`           | Works for **all** panes, agent or not — the socket API has `pane.focus` even though the CLI does not expose it. |
 
 ## Search
 
@@ -222,13 +242,14 @@ herdr-configurable-picker/
 ├── SPEC.md                   # this document
 ├── CHANGELOG.md              # to be added
 └── src/
-    ├── main.rs               # entry point, TUI event loop
-    ├── config.rs             # plugin config load + key parsing
-    ├── keymap.rs             # KeyMap resolution & conflict detection
-    ├── herdr_client.rs       # calls out to $HERDR_BIN_PATH
-    ├── model.rs              # Workspace/Tab/Pane structs
-    ├── tree.rs               # tree rendering / cursor / expand-collapse
-    ├── search.rs             # substring search + descendant-visibility
+    ├── main.rs               # entry point, env contract, TUI event loop
+    ├── config.rs             # plugin config load + first-run seeding
+    ├── keymap.rs             # key parsing, chord resolution, conflicts
+    ├── herdr_client.rs       # socket client + wire structs (HerdrApi trait)
+    ├── app.rs                # pure input state machine (keys -> Outcome)
+    ├── model.rs              # flat rows (M1; absorbed into tree.rs in M2)
+    ├── tree.rs               # tree rendering / cursor / expand-collapse (M2)
+    ├── search.rs             # substring search + descendant-visibility (M3)
     └── ui.rs                 # ratatui layout, header, footer, colors
 ```
 
@@ -265,9 +286,9 @@ Dependencies (proposed):
 - Add GitHub topic `herdr-plugin` so herdr's marketplace picks it up.
 - Announce (optionally, via herdr Discussions).
 
-## Open questions to resolve
+## Open questions — all resolved (2026-07-03, against herdr source)
 
-1. **`--json` flag on herdr CLI**: `workspace list` / `tab list` / `pane list` already emit JSON by default. Confirm this is stable API.
-2. **Path A vs B for keybinding to plugin pane**: does `[[keys.command]] type = "plugin_action"` accept a manifest-declared pane id, or is a wrapper action needed? Verify against herdr source before writing install docs.
-3. **Overlay auto-close on child exit**: verify by test.
-4. **`pane.focus <pane_id>` in CLI/socket API**: currently missing; agentless-pane focus falls back to `tab focus`. Consider raising an upstream Discussion (a small addition that would benefit any plugin doing navigation).
+1. ~~**`--json` flag on herdr CLI**~~ — Moot: the plugin talks to the socket directly. (The CLI output *is* the raw socket response, so the shapes are the same either way.)
+2. ~~**Path A vs B for keybinding to plugin pane**~~ — Path B. `[[keys.command]] type = "plugin_action"` resolves manifest **actions** only (`CommandKeybindType` has no pane variant), so the manifest ships an `open` action wrapping `plugin pane open`. See "User keybinding".
+3. ~~**Overlay auto-close on child exit**~~ — Confirmed in source: on child exit (any exit code) herdr removes the overlay pane and restores the previous focus and zoom state. Exiting 0 *is* the close mechanism.
+4. ~~**`pane.focus <pane_id>`**~~ — Already exists in the **socket** API (`Method::PaneFocus`); only the CLI lacks a subcommand for it. Direct socket access makes agentless-pane focus work without any upstream change.
