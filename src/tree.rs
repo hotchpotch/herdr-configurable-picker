@@ -371,6 +371,41 @@ impl Tree {
     }
 }
 
+/// The picker's own overlay pane is part of the snapshot it fetches: herdr
+/// focuses the overlay on open, so the raw data shows OUR pane as current
+/// and lists it as a jump target. Drop it and hand "focused" back to the
+/// pane the user came from (`focused_pane_id` in the invocation context),
+/// fixing the branch pane counts on the way.
+pub fn drop_own_overlay_pane(
+    workspaces: &mut [WorkspaceInfo],
+    tabs: &mut [TabInfo],
+    panes: &mut Vec<PaneInfo>,
+    context_pane_id: Option<&str>,
+) {
+    let Some(context_pane_id) = context_pane_id else {
+        return; // no context to tell us apart from the user's pane
+    };
+    let Some(overlay_idx) = panes
+        .iter()
+        .position(|pane| pane.focused && pane.pane_id != context_pane_id)
+    else {
+        return;
+    };
+    let overlay = panes.remove(overlay_idx);
+    for tab in tabs.iter_mut().filter(|t| t.tab_id == overlay.tab_id) {
+        tab.pane_count = tab.pane_count.saturating_sub(1);
+    }
+    for ws in workspaces
+        .iter_mut()
+        .filter(|ws| ws.workspace_id == overlay.workspace_id)
+    {
+        ws.pane_count = ws.pane_count.saturating_sub(1);
+    }
+    for pane in panes.iter_mut() {
+        pane.focused = pane.pane_id == context_pane_id;
+    }
+}
+
 /// Pane display label: the user-set label wins; otherwise "pane N" derived
 /// from the public id suffix ("w1:p8" -> "pane 8").
 fn pane_label(info: &PaneInfo) -> String {
@@ -622,6 +657,75 @@ mod tests {
         assert_eq!(tree.parent_path(pane_path), Some(tab_path));
         assert_eq!(tree.parent_path(tab_path), Some(ws_path));
         assert_eq!(tree.parent_path(ws_path), None);
+    }
+
+    #[test]
+    fn drop_own_overlay_pane_removes_the_picker_and_restores_focus() {
+        // Snapshot as the picker sees it: the overlay pane (w1:p9) stole
+        // focus from the pane the user was in (w1:p1).
+        let mut workspaces = vec![{
+            let mut ws = workspace("w1", 1, "alpha", true);
+            ws.pane_count = 3;
+            ws
+        }];
+        let mut tabs = vec![tab("w1:t1", "w1", 1, "a-one", true, 3)];
+        let mut panes = vec![
+            pane("w1:p1", "w1:t1", "w1", false, None),
+            pane("w1:p2", "w1:t1", "w1", false, None),
+            {
+                let mut overlay = pane("w1:p9", "w1:t1", "w1", true, None);
+                overlay.label = Some("Goto".to_string());
+                overlay
+            },
+        ];
+
+        drop_own_overlay_pane(&mut workspaces, &mut tabs, &mut panes, Some("w1:p1"));
+
+        assert_eq!(panes.len(), 2, "overlay pane removed");
+        assert!(panes.iter().all(|p| p.pane_id != "w1:p9"));
+        assert!(panes[0].focused, "focus handed back to the context pane");
+        assert_eq!(tabs[0].pane_count, 2);
+        assert_eq!(workspaces[0].pane_count, 2);
+
+        let tree = Tree::build(workspaces, tabs, panes, InitialExpansion::All);
+        let rows = tree.visible_rows();
+        let current: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.is_current)
+            .map(|r| r.label.as_str())
+            .collect();
+        assert_eq!(current, vec!["pane 1"]);
+    }
+
+    #[test]
+    fn drop_own_overlay_pane_without_context_changes_nothing() {
+        let mut workspaces = vec![workspace("w1", 1, "alpha", true)];
+        let mut tabs = vec![tab("w1:t1", "w1", 1, "a-one", true, 2)];
+        let mut panes = vec![
+            pane("w1:p1", "w1:t1", "w1", false, None),
+            pane("w1:p9", "w1:t1", "w1", true, None),
+        ];
+
+        drop_own_overlay_pane(&mut workspaces, &mut tabs, &mut panes, None);
+
+        assert_eq!(panes.len(), 2);
+        assert_eq!(tabs[0].pane_count, 2);
+    }
+
+    #[test]
+    fn drop_own_overlay_pane_leaves_a_genuinely_focused_context_pane_alone() {
+        // Hypothetical --no-focus open: the context pane is still focused.
+        let mut workspaces = vec![workspace("w1", 1, "alpha", true)];
+        let mut tabs = vec![tab("w1:t1", "w1", 1, "a-one", true, 2)];
+        let mut panes = vec![
+            pane("w1:p1", "w1:t1", "w1", true, None),
+            pane("w1:p9", "w1:t1", "w1", false, None),
+        ];
+
+        drop_own_overlay_pane(&mut workspaces, &mut tabs, &mut panes, Some("w1:p1"));
+
+        assert_eq!(panes.len(), 2, "nothing looks like a focused overlay");
+        assert!(panes[0].focused);
     }
 
     #[test]

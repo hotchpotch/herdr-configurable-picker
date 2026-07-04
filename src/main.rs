@@ -72,10 +72,16 @@ fn main() -> ExitCode {
         let panes = client.list_panes()?;
         Ok((workspaces, tabs, panes))
     });
-    let (workspaces, tabs, panes) = match snapshot {
+    let (mut workspaces, mut tabs, mut panes) = match snapshot {
         Ok(snapshot) => snapshot,
         Err(e) => return fail_visibly(&format!("{e:#}")),
     };
+    tree::drop_own_overlay_pane(
+        &mut workspaces,
+        &mut tabs,
+        &mut panes,
+        context_focused_pane_id().as_deref(),
+    );
 
     let tree = Tree::build(workspaces, tabs, panes, initial_expansion);
     let mut app = App::new(tree, enter_on_branch);
@@ -117,6 +123,15 @@ fn main() -> ExitCode {
     // Exit 0 even on cancel: the overlay closing is the normal outcome, and
     // herdr raises a toast for non-zero exits.
     ExitCode::SUCCESS
+}
+
+/// The pane the user came from, out of HERDR_PLUGIN_CONTEXT_JSON. Needed to
+/// tell the picker's own overlay pane apart from the user's pane in the
+/// snapshot. Best effort: on any missing piece the overlay stays listed.
+fn context_focused_pane_id() -> Option<String> {
+    let context = std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok()?;
+    let context: serde_json::Value = serde_json::from_str(&context).ok()?;
+    Some(context.get("focused_pane_id")?.as_str()?.to_string())
 }
 
 /// Stderr flashes and vanishes with the overlay pane, so warnings also go
