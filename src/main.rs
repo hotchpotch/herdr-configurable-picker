@@ -5,7 +5,6 @@ mod app;
 mod config;
 mod herdr_client;
 mod keymap;
-mod model;
 mod tree;
 mod ui;
 
@@ -15,9 +14,10 @@ use std::process::ExitCode;
 
 use crossterm::event::{self, Event};
 
-use app::{App, Outcome};
+use app::{App, EnterOnBranch, Outcome};
 use herdr_client::{HerdrApi, SocketClient};
 use keymap::KeyPress;
+use tree::{FocusTarget, InitialExpansion, Tree};
 
 fn main() -> ExitCode {
     let Some(socket_path) = std::env::var_os("HERDR_SOCKET_PATH") else {
@@ -44,23 +44,41 @@ fn main() -> ExitCode {
     };
     let (keymap, mut keymap_warnings) = keymap::Keymap::from_bindings(&config.keys.to_bindings());
     warnings.append(&mut keymap_warnings);
+
+    let initial_expansion = InitialExpansion::parse(&config.behavior.initial_expansion)
+        .unwrap_or_else(|| {
+            warnings.push(format!(
+                "unknown initial_expansion {:?}; using \"current_workspace\"",
+                config.behavior.initial_expansion
+            ));
+            InitialExpansion::CurrentWorkspace
+        });
+    let enter_on_branch =
+        EnterOnBranch::parse(&config.behavior.enter_on_branch).unwrap_or_else(|| {
+            warnings.push(format!(
+                "unknown enter_on_branch {:?}; using \"jump\"",
+                config.behavior.enter_on_branch
+            ));
+            EnterOnBranch::Jump
+        });
     report_warnings(&warnings);
 
     let mut client = match SocketClient::connect(Path::new(&socket_path)) {
         Ok(client) => client,
         Err(e) => return fail_visibly(&format!("{e:#}")),
     };
-    let snapshot = client
-        .list_workspaces()
-        .and_then(|workspaces| Ok((workspaces, client.list_tabs()?)));
-    let (workspaces, tabs) = match snapshot {
+    let snapshot = client.list_workspaces().and_then(|workspaces| {
+        let tabs = client.list_tabs()?;
+        let panes = client.list_panes()?;
+        Ok((workspaces, tabs, panes))
+    });
+    let (workspaces, tabs, panes) = match snapshot {
         Ok(snapshot) => snapshot,
         Err(e) => return fail_visibly(&format!("{e:#}")),
     };
 
-    let items = model::build_flat_list(&workspaces, &tabs);
-    let cursor = model::initial_cursor(&items, context_tab_id().as_deref());
-    let mut app = App::new(items, cursor);
+    let tree = Tree::build(workspaces, tabs, panes, initial_expansion);
+    let mut app = App::new(tree, enter_on_branch);
     let hints = ui::FooterHints::from_keymap(&keymap);
 
     let mut terminal = ratatui::init();
@@ -75,7 +93,7 @@ fn main() -> ExitCode {
                     match app.handle_key(&keymap, press) {
                         Outcome::Continue => {}
                         Outcome::Cancel => break None,
-                        Outcome::FocusTab(tab_id) => break Some(tab_id),
+                        Outcome::Focus(target) => break Some(target),
                     }
                 }
             }
@@ -86,22 +104,19 @@ fn main() -> ExitCode {
     };
     ratatui::restore();
 
-    if let Some(tab_id) = selection {
-        if let Err(e) = client.focus_tab(&tab_id) {
+    if let Some(target) = selection {
+        let focused = match &target {
+            FocusTarget::Workspace(id) => client.focus_workspace(id),
+            FocusTarget::Tab(id) => client.focus_tab(id),
+            FocusTarget::Pane(id) => client.focus_pane(id),
+        };
+        if let Err(e) = focused {
             eprintln!("herdr-configurable-picker: {e:#}");
         }
     }
     // Exit 0 even on cancel: the overlay closing is the normal outcome, and
     // herdr raises a toast for non-zero exits.
     ExitCode::SUCCESS
-}
-
-/// The tab the picker was invoked from, out of HERDR_PLUGIN_CONTEXT_JSON.
-/// Best effort: any missing piece just means the default cursor position.
-fn context_tab_id() -> Option<String> {
-    let context = std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok()?;
-    let context: serde_json::Value = serde_json::from_str(&context).ok()?;
-    Some(context.get("tab_id")?.as_str()?.to_string())
 }
 
 /// Stderr flashes and vanishes with the overlay pane, so warnings also go

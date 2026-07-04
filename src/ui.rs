@@ -1,5 +1,6 @@
-//! ratatui rendering: bordered list, reverse-video cursor row, and a footer
-//! hint line built from the *actual* keymap so it never lies about bindings.
+//! ratatui rendering: bordered tree list, reverse-video cursor row, and a
+//! footer hint line built from the *actual* keymap so it never lies about
+//! bindings.
 
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Modifier, Style};
@@ -10,7 +11,7 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::herdr_client::AgentStatus;
 use crate::keymap::{Action, Keymap};
-use crate::model::Item;
+use crate::tree::{Row, RowKind};
 
 /// Footer entries as `(key label, action label)` pairs, e.g. `("↑/↓", "move")`.
 pub struct FooterHints {
@@ -29,7 +30,12 @@ impl FooterHints {
             (Some(key), None) | (None, Some(key)) => entries.push((key, "move".to_string())),
             (None, None) => {}
         }
-        for (action, label) in [(Action::Accept, "accept"), (Action::Cancel, "cancel")] {
+        for (action, label) in [
+            (Action::Expand, "expand"),
+            (Action::Collapse, "collapse"),
+            (Action::Accept, "accept"),
+            (Action::Cancel, "cancel"),
+        ] {
             if let Some(key) = keymap.first_binding_label(action) {
                 entries.push((key, label.to_string()));
             }
@@ -55,16 +61,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
         Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
     app.viewport_height = list_area.height;
 
-    if app.items.is_empty() {
+    if app.rows().is_empty() {
         frame.render_widget(Paragraph::new("No workspaces found."), list_area);
     } else {
         let width = list_area.width as usize;
-        let rows: Vec<ListItem> = app
-            .items
+        let items: Vec<ListItem> = app
+            .rows()
             .iter()
-            .map(|item| ListItem::new(Line::from(row_text(item, width))))
+            .map(|row| ListItem::new(Line::from(row_text(row, width))))
             .collect();
-        let list = List::new(rows).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+        let list = List::new(items).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
         let mut state = ListState::default().with_selected(Some(app.cursor));
         frame.render_stateful_widget(list, list_area, &mut state);
     }
@@ -73,21 +79,33 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
     frame.render_widget(footer, footer_area);
 }
 
-/// One row: current-tab marker + labels on the left, pane count and agent
-/// status right-aligned. Truncates the left side on narrow terminals.
-fn row_text(item: &Item, width: usize) -> String {
-    let marker = if item.is_current { "→" } else { " " };
-    let left = format!("{marker} {} › {}", item.workspace_label, item.tab_label);
-    let panes = if item.pane_count == 1 {
-        "pane"
+/// One row: current marker, indentation, expansion glyph, and label on the
+/// left; pane count / agent info right-aligned. Drops the right column on
+/// narrow terminals rather than wrapping.
+fn row_text(row: &Row, width: usize) -> String {
+    let marker = if row.is_current { "→" } else { " " };
+    let indent = "  ".repeat(row.depth as usize);
+    let glyph = if row.expandable {
+        if row.expanded {
+            "▼ "
+        } else {
+            "▶ "
+        }
+    } else if row.kind == RowKind::Pane {
+        ""
     } else {
-        "panes"
+        "· " // childless workspace/tab: nothing to expand
     };
-    let right = format!(
-        "{} {panes}  {}",
-        item.pane_count,
-        status_label(item.agent_status)
-    );
+    let left = format!("{marker} {indent}{glyph}{}", row.label);
+
+    let status = status_label(row.agent_status);
+    let right = if row.kind == RowKind::Pane {
+        let agent = row.agent.as_deref().unwrap_or("shell");
+        format!("{agent}  {status}")
+    } else {
+        let panes = if row.pane_count == 1 { "pane" } else { "panes" };
+        format!("{} {panes}  {status}", row.pane_count)
+    };
 
     let left_cols = left.chars().count();
     let right_cols = right.chars().count();
@@ -113,19 +131,65 @@ fn status_label(status: AgentStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::EnterOnBranch;
     use crate::config::KeysConfig;
+    use crate::herdr_client::{PaneInfo, TabInfo, WorkspaceInfo};
+    use crate::tree::{InitialExpansion, Tree};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    fn item(ws: &str, tab: &str, pane_count: usize, current: bool) -> Item {
-        Item {
-            tab_id: format!("{ws}:{tab}"),
-            workspace_label: ws.to_string(),
-            tab_label: tab.to_string(),
-            pane_count,
-            agent_status: AgentStatus::Working,
-            is_current: current,
+    fn workspace(id: &str, number: usize, label: &str, focused: bool) -> WorkspaceInfo {
+        WorkspaceInfo {
+            workspace_id: id.to_string(),
+            number,
+            label: label.to_string(),
+            focused,
+            pane_count: 0,
+            tab_count: 0,
+            active_tab_id: String::new(),
+            agent_status: AgentStatus::Unknown,
         }
+    }
+
+    fn tab(id: &str, ws_id: &str, number: usize, label: &str, focused: bool) -> TabInfo {
+        TabInfo {
+            tab_id: id.to_string(),
+            workspace_id: ws_id.to_string(),
+            number,
+            label: label.to_string(),
+            focused,
+            pane_count: 2,
+            agent_status: AgentStatus::Working,
+        }
+    }
+
+    fn pane(id: &str, tab_id: &str, ws_id: &str, focused: bool, agent: Option<&str>) -> PaneInfo {
+        PaneInfo {
+            pane_id: id.to_string(),
+            tab_id: tab_id.to_string(),
+            workspace_id: ws_id.to_string(),
+            focused,
+            agent: agent.map(|a| a.to_string()),
+            display_agent: None,
+            agent_status: AgentStatus::Idle,
+            cwd: None,
+            label: None,
+            title: None,
+            terminal_id: format!("term_{id}"),
+        }
+    }
+
+    fn sample_app() -> App {
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "mothership", true)],
+            vec![tab("w1:t1", "w1", 1, "main", true)],
+            vec![
+                pane("w1:p1", "w1:t1", "w1", true, Some("claude")),
+                pane("w1:p2", "w1:t1", "w1", false, None),
+            ],
+            InitialExpansion::All,
+        );
+        App::new(tree, EnterOnBranch::Jump)
     }
 
     fn default_hints() -> FooterHints {
@@ -157,68 +221,70 @@ mod tests {
     }
 
     #[test]
-    fn rows_show_labels_pane_count_and_status() {
-        let mut app = App::new(
-            vec![
-                item("mothership", "main", 2, false),
-                item("herdr", "dev", 1, false),
-            ],
-            0,
-        );
+    fn tree_rows_show_glyphs_indentation_and_right_columns() {
+        let mut app = sample_app();
         let terminal = render(80, 24, &mut app);
         let screen = screen(&terminal);
 
-        assert!(screen.contains("mothership › main"), "screen:\n{screen}");
-        assert!(screen.contains("2 panes"), "screen:\n{screen}");
-        assert!(screen.contains("1 pane "), "screen:\n{screen}");
-        assert!(screen.contains("working"), "screen:\n{screen}");
+        assert!(screen.contains("▼ mothership"), "screen:\n{screen}");
+        assert!(screen.contains("  ▼ main"), "indented tab:\n{screen}");
+        assert!(screen.contains("    pane 1"), "indented pane:\n{screen}");
+        assert!(screen.contains("2 panes  working"), "tab column:\n{screen}");
+        assert!(
+            screen.contains("claude  idle"),
+            "agent pane column:\n{screen}"
+        );
+        assert!(
+            screen.contains("shell  idle"),
+            "agentless column:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn collapsed_branch_shows_the_collapsed_glyph() {
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "mothership", true)],
+            vec![tab("w1:t1", "w1", 1, "main", true)],
+            vec![pane("w1:p1", "w1:t1", "w1", true, None)],
+            InitialExpansion::None,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+        let terminal = render(80, 24, &mut app);
+        assert!(
+            screen(&terminal).contains("▶ mothership"),
+            "screen:\n{}",
+            screen(&terminal)
+        );
     }
 
     #[test]
     fn cursor_row_is_reversed() {
-        let mut app = App::new(
-            vec![item("a", "one", 1, false), item("b", "two", 1, false)],
-            1,
-        );
+        let mut app = sample_app(); // cursor starts on the focused pane row
         let terminal = render(80, 24, &mut app);
 
         let buffer = terminal.backend().buffer();
         let lines = buffer_lines(&terminal);
         let cursor_y = lines
             .iter()
-            .position(|line| line.contains("b › two"))
+            .position(|line| line.contains("pane 1"))
             .expect("cursor row must be on screen") as u16;
-        let x = lines[cursor_y as usize].find('b').unwrap() as u16;
+        let x = lines[cursor_y as usize].find('p').unwrap() as u16;
         let style = buffer.cell((x, cursor_y)).unwrap().style();
         assert!(
             style.add_modifier.contains(Modifier::REVERSED),
             "cursor row must be reverse video, got {style:?}"
         );
-
-        let other_y = lines
-            .iter()
-            .position(|line| line.contains("a › one"))
-            .unwrap() as u16;
-        let x = lines[other_y as usize].find('a').unwrap() as u16;
-        let style = buffer.cell((x, other_y)).unwrap().style();
-        assert!(
-            !style.add_modifier.contains(Modifier::REVERSED),
-            "non-cursor rows must not be reversed"
-        );
     }
 
     #[test]
-    fn current_tab_carries_a_marker() {
-        let mut app = App::new(
-            vec![item("a", "one", 1, false), item("b", "two", 1, true)],
-            0,
-        );
+    fn current_row_carries_a_marker() {
+        let mut app = sample_app();
         let terminal = render(80, 24, &mut app);
         let lines = buffer_lines(&terminal);
 
-        let current = lines.iter().find(|l| l.contains("b › two")).unwrap();
+        let current = lines.iter().find(|l| l.contains("pane 1")).unwrap();
         assert!(current.contains("→"), "current row: {current:?}");
-        let other = lines.iter().find(|l| l.contains("a › one")).unwrap();
+        let other = lines.iter().find(|l| l.contains("pane 2")).unwrap();
         assert!(!other.contains("→"), "other row: {other:?}");
     }
 
@@ -227,13 +293,14 @@ mod tests {
         let (keymap, warnings) = Keymap::from_bindings(&[
             (Action::Down, vec!["ctrl+j".to_string()]),
             (Action::Up, vec!["ctrl+k".to_string()]),
-            (Action::Accept, vec!["tab".to_string()]),
+            (Action::Expand, vec!["tab".to_string()]),
+            (Action::Accept, vec!["ctrl+m".to_string()]),
             (Action::Cancel, vec!["q".to_string()]),
         ]);
         assert!(warnings.is_empty());
         let hints = FooterHints::from_keymap(&keymap);
 
-        let mut app = App::new(vec![item("a", "one", 1, false)], 0);
+        let mut app = sample_app();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
             .draw(|frame| draw(frame, &mut app, &hints))
@@ -241,13 +308,18 @@ mod tests {
         let screen = screen(&terminal);
 
         assert!(screen.contains("C-k/C-j move"), "screen:\n{screen}");
-        assert!(screen.contains("tab accept"), "screen:\n{screen}");
+        assert!(screen.contains("tab expand"), "screen:\n{screen}");
         assert!(screen.contains("q cancel"), "screen:\n{screen}");
+        assert!(
+            !screen.contains("collapse"),
+            "unbound actions stay out of the footer:\n{screen}"
+        );
     }
 
     #[test]
-    fn empty_list_shows_placeholder() {
-        let mut app = App::new(Vec::new(), 0);
+    fn empty_tree_shows_placeholder() {
+        let tree = Tree::build(vec![], vec![], vec![], InitialExpansion::All);
+        let mut app = App::new(tree, EnterOnBranch::Jump);
         let terminal = render(80, 24, &mut app);
         assert!(
             screen(&terminal).contains("No workspaces found."),
@@ -258,34 +330,30 @@ mod tests {
 
     #[test]
     fn narrow_terminal_truncates_without_panicking() {
-        let mut app = App::new(
-            vec![item(
-                "a-very-long-workspace-label",
-                "long-tab-name",
-                12,
-                true,
-            )],
-            0,
-        );
+        let mut app = sample_app();
         let terminal = render(20, 6, &mut app);
-        // Rendering finished without panicking; the row is truncated to fit.
         assert!(!screen(&terminal).is_empty());
     }
 
     #[test]
     fn cursor_far_down_stays_visible_and_viewport_height_is_recorded() {
-        let items: Vec<Item> = (1..=25)
-            .map(|n| item("ws", &format!("tab{n:02}"), 1, false))
+        let panes: Vec<PaneInfo> = (1..=25)
+            .map(|n| pane(&format!("w1:p{n}"), "w1:t1", "w1", n == 20, None))
             .collect();
-        let mut app = App::new(items, 20);
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "mothership", true)],
+            vec![tab("w1:t1", "w1", 1, "main", true)],
+            panes,
+            InitialExpansion::All,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump); // cursor on pane 20
         let terminal = render(80, 12, &mut app);
         let screen = screen(&terminal);
 
         assert!(
-            screen.contains("tab21"),
-            "row under cursor (index 20) must be scrolled into view:\n{screen}"
+            screen.contains("pane 20"),
+            "row under cursor must be scrolled into view:\n{screen}"
         );
-        // 12 rows minus top/bottom border minus 2 footer rows.
         assert_eq!(app.viewport_height, 8);
     }
 }

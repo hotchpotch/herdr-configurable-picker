@@ -177,10 +177,6 @@ impl Tree {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.workspaces.is_empty()
-    }
-
     pub fn visible_rows(&self) -> Vec<Row> {
         let current = self.current_visible_path();
         let mut rows = Vec::new();
@@ -569,7 +565,7 @@ mod tests {
         assert_eq!(fixture(InitialExpansion::None).initial_cursor(), 0);
         let empty = Tree::build(vec![], vec![], vec![], InitialExpansion::All);
         assert_eq!(empty.initial_cursor(), 0);
-        assert!(empty.is_empty());
+        assert!(empty.visible_rows().is_empty());
     }
 
     #[test]
