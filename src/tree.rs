@@ -180,9 +180,69 @@ impl Tree {
     }
 
     pub fn visible_rows(&self) -> Vec<Row> {
-        let current = self.current_visible_path();
+        self.build_rows(None)
+    }
+
+    /// Search view: a node is visible iff its own label matches or any
+    /// descendant's does (ancestors of matches come along for context;
+    /// children of a matching branch do not). Collapse state is ignored
+    /// while a filter is active. Empty query = the normal expansion view.
+    pub fn visible_rows_filtered(&self, query: &str) -> Vec<Row> {
+        if query.is_empty() {
+            self.build_rows(None)
+        } else {
+            self.build_rows(Some(query))
+        }
+    }
+
+    fn build_rows(&self, filter: Option<&str>) -> Vec<Row> {
+        // No current marker while filtering: the whole point of a filter is
+        // navigating away, and the current chain may not even be visible.
+        let current = if filter.is_none() {
+            self.current_visible_path()
+        } else {
+            None
+        };
         let mut rows = Vec::new();
         for (ws_idx, ws) in self.workspaces.iter().enumerate() {
+            // (tab shown, per-pane shown) for this workspace under `filter`.
+            let tab_states: Vec<(bool, Vec<bool>)> = ws
+                .tabs
+                .iter()
+                .map(|tab| match filter {
+                    Option::None => (
+                        ws.expanded,
+                        tab.panes
+                            .iter()
+                            .map(|_| ws.expanded && tab.expanded)
+                            .collect(),
+                    ),
+                    Some(query) => {
+                        let pane_shown: Vec<bool> = tab
+                            .panes
+                            .iter()
+                            .map(|pane| {
+                                crate::search::label_matches(&pane_label(&pane.info), query)
+                            })
+                            .collect();
+                        let tab_shown = crate::search::label_matches(&tab.info.label, query)
+                            || pane_shown.iter().any(|&shown| shown);
+                        (tab_shown, pane_shown)
+                    }
+                })
+                .collect();
+            let ws_shown = match filter {
+                Option::None => true,
+                Some(query) => {
+                    crate::search::label_matches(&ws.label, query)
+                        || tab_states.iter().any(|(shown, _)| *shown)
+                }
+            };
+            if !ws_shown {
+                continue;
+            }
+            let any_tab_shown = tab_states.iter().any(|(shown, _)| *shown);
+
             let ws_path = NodePath {
                 ws: ws_idx,
                 tab: None,
@@ -201,7 +261,10 @@ impl Tree {
                 depth: 0,
                 label: ws.label.clone(),
                 expandable: !ws.tabs.is_empty(),
-                expanded: ws.expanded,
+                expanded: match filter {
+                    Option::None => ws.expanded,
+                    Some(_) => any_tab_shown,
+                },
                 pane_count: ws_pane_count,
                 agent: None,
                 agent_status: ws_status,
@@ -220,22 +283,28 @@ impl Tree {
                     ("status", ws_status.name().to_string()),
                 ],
             });
-            if !ws.expanded {
-                continue;
-            }
-            for (tab_idx, tab) in ws.tabs.iter().enumerate() {
+            for (tab_idx, (tab, (tab_shown, pane_shown))) in
+                ws.tabs.iter().zip(&tab_states).enumerate()
+            {
+                if !tab_shown {
+                    continue;
+                }
                 let tab_path = NodePath {
                     ws: ws_idx,
                     tab: Some(tab_idx),
                     pane: None,
                 };
+                let any_pane_shown = pane_shown.iter().any(|&shown| shown);
                 rows.push(Row {
                     path: tab_path,
                     kind: RowKind::Tab,
                     depth: 1,
                     label: tab.info.label.clone(),
                     expandable: !tab.panes.is_empty(),
-                    expanded: tab.expanded,
+                    expanded: match filter {
+                        Option::None => tab.expanded,
+                        Some(_) => any_pane_shown,
+                    },
                     pane_count: tab.info.pane_count,
                     agent: None,
                     agent_status: tab.info.agent_status,
@@ -248,10 +317,10 @@ impl Tree {
                         ("status", tab.info.agent_status.name().to_string()),
                     ],
                 });
-                if !tab.expanded {
-                    continue;
-                }
                 for (pane_idx, pane) in tab.panes.iter().enumerate() {
+                    if !pane_shown[pane_idx] {
+                        continue;
+                    }
                     let pane_path = NodePath {
                         ws: ws_idx,
                         tab: Some(tab_idx),
@@ -766,6 +835,43 @@ mod tests {
 
         assert_eq!(panes.len(), 2, "nothing looks like a focused overlay");
         assert!(panes[0].focused);
+    }
+
+    #[test]
+    fn filter_shows_matches_and_their_ancestors_ignoring_collapse() {
+        // Collapsed everywhere: the filter must reveal matches regardless.
+        let tree = fixture(InitialExpansion::None);
+
+        let rows = tree.visible_rows_filtered("two");
+        assert_eq!(labels(&rows), vec!["alpha", "a-two"]);
+        assert_eq!(rows[0].kind, RowKind::Workspace);
+        assert!(rows[0].expanded, "ancestor renders as expanded");
+
+        // A matching pane pulls in its whole ancestor chain.
+        let rows = tree.visible_rows_filtered("pane 3");
+        assert_eq!(labels(&rows), vec!["alpha", "a-two", "pane 3"]);
+    }
+
+    #[test]
+    fn filter_is_case_insensitive_and_does_not_reveal_children_of_matches() {
+        let tree = fixture(InitialExpansion::All);
+
+        // Workspace matches: children stay hidden (they do not match).
+        let rows = tree.visible_rows_filtered("ALPHA");
+        assert_eq!(labels(&rows), vec!["alpha"]);
+        assert!(!rows[0].expanded, "no visible children");
+
+        let rows = tree.visible_rows_filtered("zzz");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn empty_filter_falls_back_to_expansion_visibility() {
+        let tree = fixture(InitialExpansion::None);
+        assert_eq!(
+            labels(&tree.visible_rows_filtered("")),
+            labels(&tree.visible_rows())
+        );
     }
 
     #[test]

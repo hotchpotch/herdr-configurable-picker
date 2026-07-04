@@ -43,6 +43,13 @@ toggle   = ["space"]
 accept = ["enter"]
 cancel = ["esc", "ctrl+c", "ctrl+g"]
 
+# Search. While the search prompt is focused, printable keys type into the
+# query; search_clear / search_exit and non-printable normal-mode keys
+# (ctrl+n, arrows, enter, ...) still work.
+search_start = ["/"]
+search_clear = ["ctrl+u"]
+search_exit  = ["esc"]
+
 [display]
 show_pane_count   = true
 show_agent_status = true
@@ -81,6 +88,9 @@ pub struct KeysConfig {
     pub toggle: Vec<String>,
     pub accept: Vec<String>,
     pub cancel: Vec<String>,
+    pub search_start: Vec<String>,
+    pub search_clear: Vec<String>,
+    pub search_exit: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -117,6 +127,9 @@ impl Default for KeysConfig {
             toggle: keys(&["space"]),
             accept: keys(&["enter"]),
             cancel: keys(&["esc", "ctrl+c", "ctrl+g"]),
+            search_start: keys(&["/"]),
+            search_clear: keys(&["ctrl+u"]),
+            search_exit: keys(&["esc"]),
         }
     }
 }
@@ -157,6 +170,17 @@ impl KeysConfig {
             (Action::Toggle, self.toggle.clone()),
             (Action::Accept, self.accept.clone()),
             (Action::Cancel, self.cancel.clone()),
+            (Action::SearchStart, self.search_start.clone()),
+        ]
+    }
+
+    /// The search-mode table. Kept separate from [`Self::to_bindings`] so a
+    /// key like ctrl+u can mean page_up in normal mode and clear-query while
+    /// searching without tripping conflict detection.
+    pub fn to_search_bindings(&self) -> Vec<(Action, Vec<String>)> {
+        vec![
+            (Action::SearchClear, self.search_clear.clone()),
+            (Action::SearchExit, self.search_exit.clone()),
         ]
     }
 }
@@ -250,9 +274,22 @@ mod tests {
                 Action::Toggle,
                 Action::Accept,
                 Action::Cancel,
+                Action::SearchStart,
             ]
         );
         assert_eq!(bindings[0].1, vec!["down", "ctrl+n", "j"]);
+    }
+
+    #[test]
+    fn search_mode_keys_live_in_their_own_table() {
+        let bindings = KeysConfig::default().to_search_bindings();
+        assert_eq!(
+            bindings,
+            vec![
+                (Action::SearchClear, vec!["ctrl+u".to_string()]),
+                (Action::SearchExit, vec!["esc".to_string()]),
+            ]
+        );
     }
 
     #[test]
