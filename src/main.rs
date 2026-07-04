@@ -6,6 +6,7 @@ mod config;
 mod herdr_client;
 mod keymap;
 mod model;
+mod tree;
 mod ui;
 
 use std::io::Write as _;
