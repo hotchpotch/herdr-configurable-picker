@@ -53,7 +53,7 @@ icon_set = "nerd"
 
 [behavior]
 # "all" | "current_workspace" | "none"
-initial_expansion = "current_workspace"
+initial_expansion = "all"
 
 # Enter on a branch node: "expand" or "jump"
 enter_on_branch = "jump"
@@ -135,7 +135,7 @@ impl Default for DisplayConfig {
 impl Default for BehaviorConfig {
     fn default() -> Self {
         BehaviorConfig {
-            initial_expansion: "current_workspace".to_string(),
+            initial_expansion: "all".to_string(),
             enter_on_branch: "jump".to_string(),
         }
     }
@@ -218,7 +218,7 @@ mod tests {
         assert!(config.display.show_pane_count);
         assert!(!config.display.show_cwd);
         assert_eq!(config.behavior.enter_on_branch, "jump");
-        assert_eq!(config.behavior.initial_expansion, "current_workspace");
+        assert_eq!(config.behavior.initial_expansion, "all");
     }
 
     #[test]

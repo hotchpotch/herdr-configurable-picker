@@ -112,7 +112,7 @@ show_cwd          = false     # off by default; opt in for wide terminals
 icon_set = "nerd"
 
 [behavior]
-initial_expansion = "current_workspace"   # "all" | "current_workspace" | "none"
+initial_expansion = "all"   # "all" | "current_workspace" | "none"
 
 # Enter on a branch node (workspace/tab with children):
 # "expand" - toggle the subtree; user then moves to a leaf.

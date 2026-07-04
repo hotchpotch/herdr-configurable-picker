@@ -48,10 +48,10 @@ fn main() -> ExitCode {
     let initial_expansion = InitialExpansion::parse(&config.behavior.initial_expansion)
         .unwrap_or_else(|| {
             warnings.push(format!(
-                "unknown initial_expansion {:?}; using \"current_workspace\"",
+                "unknown initial_expansion {:?}; using \"all\"",
                 config.behavior.initial_expansion
             ));
-            InitialExpansion::CurrentWorkspace
+            InitialExpansion::All
         });
     let enter_on_branch =
         EnterOnBranch::parse(&config.behavior.enter_on_branch).unwrap_or_else(|| {
