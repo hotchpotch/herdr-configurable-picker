@@ -8,8 +8,20 @@ platforms = ["linux", "macos"]
 [[build]]
 command = ["cargo", "build", "--release", "--locked"]
 
+# Keybinding entry point: herdr's `type = "plugin_action"` keybinds resolve
+# actions, not panes, so this action opens the picker pane. Action argv is
+# exec'd raw (no env expansion), hence the sh -c wrapper; the ${...:-herdr}
+# default falls back to PATH lookup if HERDR_BIN_PATH ever goes stale.
+[[actions]]
+id = "open"
+title = "Open goto picker"
+description = "Open the configurable goto picker in an overlay pane"
+command = ["sh", "-c", "exec \"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin yoshiori.herdr-configurable-picker --entrypoint picker"]
+
 [[panes]]
 id = "picker"
 title = "Goto"
 placement = "overlay"
-command = ["target/release/herdr-configurable-picker"]
+# The ./ prefix matters: herdr's pty layer resolves bare relative paths via
+# PATH lookup and only ./-prefixed ones against the plugin root cwd.
+command = ["./target/release/herdr-configurable-picker"]
