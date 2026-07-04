@@ -112,7 +112,7 @@ show_cwd          = false     # off by default; opt in for wide terminals
 icon_set = "nerd"
 
 [behavior]
-initial_expansion = "current_workspace"   # "all" | "current_workspace" | "none"
+initial_expansion = "all"   # "all" | "current_workspace" | "none"
 
 # Enter on a branch node (workspace/tab with children):
 # "expand" - toggle the subtree; user then moves to a leaf.
@@ -249,8 +249,7 @@ herdr-configurable-picker/
     ├── keymap.rs             # key parsing, chord resolution, conflicts
     ├── herdr_client.rs       # socket client + wire structs (HerdrApi trait)
     ├── app.rs                # pure input state machine (keys -> Outcome)
-    ├── model.rs              # flat rows (M1; absorbed into tree.rs in M2)
-    ├── tree.rs               # tree rendering / cursor / expand-collapse (M2)
+    ├── tree.rs               # workspace/tab/pane tree, expansion, visible rows
     ├── search.rs             # substring search + descendant-visibility (M3)
     └── ui.rs                 # ratatui layout, header, footer, colors
 ```

@@ -34,6 +34,11 @@ page_up   = ["ctrl+u", "pageup"]
 top       = ["home"]
 bottom    = ["end", "shift+g"]
 
+# Tree expansion
+expand   = ["right", "l"]
+collapse = ["left", "h"]
+toggle   = ["space"]
+
 # Confirm / cancel
 accept = ["enter"]
 cancel = ["esc", "ctrl+c", "ctrl+g"]
@@ -48,7 +53,7 @@ icon_set = "nerd"
 
 [behavior]
 # "all" | "current_workspace" | "none"
-initial_expansion = "current_workspace"
+initial_expansion = "all"
 
 # Enter on a branch node: "expand" or "jump"
 enter_on_branch = "jump"
@@ -71,6 +76,9 @@ pub struct KeysConfig {
     pub page_up: Vec<String>,
     pub top: Vec<String>,
     pub bottom: Vec<String>,
+    pub expand: Vec<String>,
+    pub collapse: Vec<String>,
+    pub toggle: Vec<String>,
     pub accept: Vec<String>,
     pub cancel: Vec<String>,
 }
@@ -104,6 +112,9 @@ impl Default for KeysConfig {
             page_up: keys(&["ctrl+u", "pageup"]),
             top: keys(&["home"]),
             bottom: keys(&["end", "shift+g"]),
+            expand: keys(&["right", "l"]),
+            collapse: keys(&["left", "h"]),
+            toggle: keys(&["space"]),
             accept: keys(&["enter"]),
             cancel: keys(&["esc", "ctrl+c", "ctrl+g"]),
         }
@@ -124,7 +135,7 @@ impl Default for DisplayConfig {
 impl Default for BehaviorConfig {
     fn default() -> Self {
         BehaviorConfig {
-            initial_expansion: "current_workspace".to_string(),
+            initial_expansion: "all".to_string(),
             enter_on_branch: "jump".to_string(),
         }
     }
@@ -141,6 +152,9 @@ impl KeysConfig {
             (Action::PageUp, self.page_up.clone()),
             (Action::Top, self.top.clone()),
             (Action::Bottom, self.bottom.clone()),
+            (Action::Expand, self.expand.clone()),
+            (Action::Collapse, self.collapse.clone()),
+            (Action::Toggle, self.toggle.clone()),
             (Action::Accept, self.accept.clone()),
             (Action::Cancel, self.cancel.clone()),
         ]
@@ -195,13 +209,16 @@ mod tests {
     fn defaults_match_spec() {
         let config = Config::default();
         assert_eq!(config.keys.down, vec!["down", "ctrl+n", "j"]);
+        assert_eq!(config.keys.expand, vec!["right", "l"]);
+        assert_eq!(config.keys.collapse, vec!["left", "h"]);
+        assert_eq!(config.keys.toggle, vec!["space"]);
         assert_eq!(config.keys.accept, vec!["enter"]);
         assert_eq!(config.keys.cancel, vec!["esc", "ctrl+c", "ctrl+g"]);
         assert_eq!(config.display.icon_set, "nerd");
         assert!(config.display.show_pane_count);
         assert!(!config.display.show_cwd);
         assert_eq!(config.behavior.enter_on_branch, "jump");
-        assert_eq!(config.behavior.initial_expansion, "current_workspace");
+        assert_eq!(config.behavior.initial_expansion, "all");
     }
 
     #[test]
@@ -228,6 +245,9 @@ mod tests {
                 Action::PageUp,
                 Action::Top,
                 Action::Bottom,
+                Action::Expand,
+                Action::Collapse,
+                Action::Toggle,
                 Action::Accept,
                 Action::Cancel,
             ]
