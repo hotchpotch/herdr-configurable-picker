@@ -5,6 +5,7 @@ mod app;
 mod config;
 mod herdr_client;
 mod keymap;
+mod search;
 mod tree;
 mod ui;
 
@@ -42,8 +43,16 @@ fn main() -> ExitCode {
             config::Config::default()
         }
     };
-    let (keymap, mut keymap_warnings) = keymap::Keymap::from_bindings(&config.keys.to_bindings());
+    let (normal_keymap, mut keymap_warnings) =
+        keymap::Keymap::from_bindings(&config.keys.to_bindings());
     warnings.append(&mut keymap_warnings);
+    let (search_keymap, mut search_warnings) =
+        keymap::Keymap::from_bindings(&config.keys.to_search_bindings());
+    warnings.append(&mut search_warnings);
+    let keymaps = keymap::Keymaps {
+        normal: normal_keymap,
+        search: search_keymap,
+    };
 
     let initial_expansion = InitialExpansion::parse(&config.behavior.initial_expansion)
         .unwrap_or_else(|| {
@@ -85,7 +94,7 @@ fn main() -> ExitCode {
 
     let tree = Tree::build(workspaces, tabs, panes, initial_expansion);
     let mut app = App::new(tree, enter_on_branch);
-    let hints = ui::FooterHints::from_keymap(&keymap);
+    let hints = ui::FooterHints::from_keymap(&keymaps.normal);
 
     let mut terminal = ratatui::init();
     let selection = loop {
@@ -96,7 +105,7 @@ fn main() -> ExitCode {
         match event::read() {
             Ok(Event::Key(key)) => {
                 if let Some(press) = KeyPress::from_crossterm(&key) {
-                    match app.handle_key(&keymap, press) {
+                    match app.handle_key(&keymaps, press) {
                         Outcome::Continue => {}
                         Outcome::Cancel => break None,
                         Outcome::Focus(target) => break Some(target),

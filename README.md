@@ -14,12 +14,14 @@ This plugin binds to a separate key and lets you rebind every action — `up`, `
 
 ## Status
 
-**v0.2 (M2): workspace → tab → pane tree with expand/collapse.** Search (M3) is next; see [SPEC.md](./SPEC.md#milestones) for the roadmap and full design.
+**v0.3 (M3): tree + search.** Polish (M4: icon sets, colors, CI) is next; see [SPEC.md](./SPEC.md#milestones) for the roadmap and full design.
 
 ## Features
 
 - Tree of `workspace → tab → pane` with expand / collapse per branch (`initial_expansion` configurable).
+- `/` search: case-insensitive substring filter that keeps ancestors of matches visible; `ctrl+n`/`ctrl+p`/arrows/`enter` keep working inside the prompt.
 - Jumps to any node: workspaces, tabs, and panes — including agentless panes, via the socket-only `pane.focus`.
+- A detail panel shows the selected node's id, agent, status, and cwd.
 - No external runtime dependencies (single Rust binary; TUI via [`ratatui`](https://ratatui.rs/)).
 - All keys user-configurable, including chords like `g g`.
 - Talks directly to herdr's API socket — no subprocess per call.
@@ -57,6 +59,10 @@ collapse  = ["left", "h"]
 toggle    = ["space"]
 accept    = ["enter"]
 cancel    = ["esc", "ctrl+c", "ctrl+g"]
+
+search_start = ["/"]
+search_clear = ["ctrl+u"]
+search_exit  = ["esc"]
 ```
 
 Broken or conflicting keys are disabled with a warning (also logged to `$HERDR_PLUGIN_STATE_DIR/picker.log`); the rest keep working. Full config schema in [SPEC.md](./SPEC.md#plugin-config-herdr_plugin_config_dirconfigtoml).

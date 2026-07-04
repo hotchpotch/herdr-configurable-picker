@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::App;
+use crate::app::{App, Mode};
 use crate::keymap::{Action, Keymap};
 use crate::tree::{Row, RowKind};
 
@@ -33,6 +33,7 @@ impl FooterHints {
         for (action, label) in [
             (Action::Expand, "expand"),
             (Action::Collapse, "collapse"),
+            (Action::SearchStart, "search"),
             (Action::Accept, "accept"),
             (Action::Cancel, "cancel"),
         ] {
@@ -61,8 +62,37 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
     let inner = outer.inner(frame.area());
     frame.render_widget(outer, frame.area());
 
-    let [main_area, footer_area] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
+    // The search prompt line exists while the prompt is focused or a filter
+    // is still applied, so the user can always see why rows are missing.
+    let show_search = app.mode == Mode::Search || !app.query.is_empty();
+    let (search_area, main_area, footer_area) = if show_search {
+        let [search, main, footer] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
+        .areas(inner);
+        (Some(search), main, footer)
+    } else {
+        let [main, footer] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
+        (None, main, footer)
+    };
+
+    if let Some(search_area) = search_area {
+        // The trailing bar marks the prompt as focused (typing goes here).
+        let prompt = if app.mode == Mode::Search {
+            format!(" / {}▏", app.query)
+        } else {
+            format!(" / {}", app.query)
+        };
+        let style = if app.mode == Mode::Search {
+            Style::new().add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().add_modifier(Modifier::DIM)
+        };
+        frame.render_widget(Paragraph::new(prompt).style(style), search_area);
+    }
 
     let (list_area, detail_area) = if main_area.width >= DETAIL_MIN_TOTAL_WIDTH {
         let detail_width = (main_area.width / 3).clamp(24, 48);
@@ -76,7 +106,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
     app.viewport_height = list_area.height;
 
     if app.rows().is_empty() {
-        frame.render_widget(Paragraph::new("No workspaces found."), list_area);
+        let placeholder = if app.query.is_empty() {
+            "No workspaces found."
+        } else {
+            "No matches."
+        };
+        frame.render_widget(Paragraph::new(placeholder), list_area);
     } else {
         let width = list_area.width as usize;
         let items: Vec<ListItem> = app
@@ -364,6 +399,56 @@ mod tests {
         let ascii_body = ascii.trim_end_matches([' ', '│']);
         assert!(jp_body.ends_with("0 panes"), "jp row: {jp:?}");
         assert!(ascii_body.ends_with("0 panes"), "ascii row: {ascii:?}");
+    }
+
+    #[test]
+    fn search_prompt_shows_query_and_focus_state() {
+        let mut app = sample_app();
+        app.mode = Mode::Search;
+        app.query = "two".to_string();
+        let terminal = render(80, 24, &mut app);
+        assert!(
+            screen(&terminal).contains("/ two▏"),
+            "focused prompt with cursor bar:\n{}",
+            screen(&terminal)
+        );
+
+        app.mode = Mode::Normal;
+        let terminal = render(80, 24, &mut app);
+        let screen = screen(&terminal);
+        assert!(
+            screen.contains("/ two"),
+            "kept filter stays visible:\n{screen}"
+        );
+        assert!(
+            !screen.contains("▏"),
+            "no cursor bar when unfocused:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn no_search_prompt_without_a_query() {
+        let mut app = sample_app();
+        let terminal = render(80, 24, &mut app);
+        let lines = buffer_lines(&terminal);
+        // The first inner line is the list, not a prompt (the footer's
+        // "/ search" hint is elsewhere).
+        assert!(
+            lines[1].contains("mothership"),
+            "first inner line: {:?}",
+            lines[1]
+        );
+    }
+
+    #[test]
+    fn footer_includes_the_search_hint() {
+        let mut app = sample_app();
+        let terminal = render(80, 24, &mut app);
+        assert!(
+            screen(&terminal).contains("/ search"),
+            "screen:\n{}",
+            screen(&terminal)
+        );
     }
 
     #[test]

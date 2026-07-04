@@ -218,11 +218,19 @@ Selecting a node sends the matching socket method:
 ## Search
 
 - Pressing `search_start` (default `/`) enters search mode.
-- Typed characters go into the query buffer, not to key bindings.
-- **Matching**: case-insensitive substring against each node's label. A node is visible if it or any descendant matches; ancestors of a match stay visible so context is preserved.
-- Cursor auto-moves to the first visible match after each keystroke.
+- **Key routing while the prompt is focused** (in priority order):
+  1. `search_clear` / `search_exit` (the search-mode table),
+  2. `backspace` deletes the last query character,
+  3. printable characters (no modifiers, or shift only) type into the query,
+  4. everything else falls through to the *normal* table — so non-printable
+     bindings like `ctrl+n`/`ctrl+p`, arrows, and `enter` keep moving,
+     accepting, and cancelling without leaving the prompt (chords do not
+     fire inside search mode).
+- **Matching**: case-insensitive substring against each node's label. A node is visible if it or any descendant matches; ancestors of a match stay visible so context is preserved. Children of a matching branch are *not* revealed — jump to the branch itself. Collapse state is ignored while a filter is active; the user's expansion state is untouched and returns when the query clears.
+- Cursor auto-moves to the first visible *match* (not a context-only ancestor) after each keystroke.
 - `search_exit` returns to normal mode; the filter result stays. `search_clear` empties the query.
-- Optional fuzzy mode (`search_mode = "fuzzy"`) deferred to v0.2.
+- No current-tab marker while a filter is active (the point of filtering is going somewhere else).
+- Optional fuzzy mode (`search_mode = "fuzzy"`) deferred.
 
 ## Behavior details
 

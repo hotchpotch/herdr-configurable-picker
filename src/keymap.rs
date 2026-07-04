@@ -23,6 +23,12 @@ pub enum Action {
     Toggle,
     Accept,
     Cancel,
+    /// Normal mode: enter search mode.
+    SearchStart,
+    /// Search mode only: empty the query.
+    SearchClear,
+    /// Search mode only: back to normal mode, keeping the filter.
+    SearchExit,
 }
 
 /// A single canonicalized key press.
@@ -157,6 +163,14 @@ impl KeyPress {
 #[derive(Debug)]
 pub struct Keymap {
     bindings: Vec<(KeySpec, Action)>,
+}
+
+/// The two binding tables: normal mode and the search prompt. Separate so
+/// one key can mean different things per mode without conflict warnings.
+#[derive(Debug)]
+pub struct Keymaps {
+    pub normal: Keymap,
+    pub search: Keymap,
 }
 
 /// What a key press means given the chord keys already pending.
