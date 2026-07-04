@@ -53,9 +53,10 @@ impl FooterHints {
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
+    let popup = popup_rect(frame.area());
     let outer = Block::bordered().title(" goto ");
-    let inner = outer.inner(frame.area());
-    frame.render_widget(outer, frame.area());
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
 
     let [list_area, footer_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
@@ -77,6 +78,20 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
 
     let footer = Paragraph::new(hints.line()).block(Block::new().borders(Borders::TOP));
     frame.render_widget(footer, footer_area);
+}
+
+/// Centered popup with the same margins as herdr's built-in goto
+/// (`navigator_popup_rect`: width/16 and height/10, floored at 2 and 1), so
+/// the picker keeps the modal geometry users know. A plugin pane cannot
+/// float over other panes — herdr composites it as a regular (zoomed) pane —
+/// so the surround is our blank canvas rather than see-through.
+fn popup_rect(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let margin_x = (area.width / 16).max(2);
+    let margin_y = (area.height / 10).max(1);
+    let width = area.width.saturating_sub(margin_x * 2).max(4);
+    let height = area.height.saturating_sub(margin_y * 2).max(4);
+    ratatui::layout::Rect::new(area.x + margin_x, area.y + margin_y, width, height)
+        .intersection(area)
 }
 
 /// One row: current marker, indentation, expansion glyph, and label on the
@@ -354,6 +369,25 @@ mod tests {
             screen.contains("pane 20"),
             "row under cursor must be scrolled into view:\n{screen}"
         );
-        assert_eq!(app.viewport_height, 8);
+        // 12 rows, popup margin 1 top+bottom -> 10, minus borders (2) and
+        // footer (2) -> 6.
+        assert_eq!(app.viewport_height, 6);
+    }
+
+    #[test]
+    fn popup_is_centered_with_builtin_goto_margins() {
+        let mut app = sample_app();
+        let terminal = render(80, 24, &mut app);
+        let lines = buffer_lines(&terminal);
+
+        // 80x24: margin_x = max(80/16, 2) = 5, margin_y = max(24/10, 1) = 2.
+        let char_at = |y: usize, x: usize| lines[y].chars().nth(x).unwrap();
+        assert_eq!(char_at(2, 5), '┌', "top-left corner at (5,2)");
+        assert_eq!(char_at(21, 5), '└', "bottom-left corner at (5,21)");
+        assert_eq!(lines[0].trim(), "", "surround above the popup stays blank");
+        assert!(
+            lines[2].chars().take(5).all(|c| c == ' '),
+            "surround left of the popup stays blank"
+        );
     }
 }
