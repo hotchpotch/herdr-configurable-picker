@@ -9,7 +9,6 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::herdr_client::AgentStatus;
 use crate::keymap::{Action, Keymap};
 use crate::tree::{Row, RowKind};
 
@@ -52,14 +51,27 @@ impl FooterHints {
     }
 }
 
-pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
-    let popup = popup_rect(frame.area());
-    let outer = Block::bordered().title(" goto ");
-    let inner = outer.inner(popup);
-    frame.render_widget(outer, popup);
+/// The detail panel needs at least this much total width to be worth
+/// splitting off; below it the list gets the whole canvas.
+const DETAIL_MIN_TOTAL_WIDTH: u16 = 60;
 
-    let [list_area, footer_area] =
+pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
+    let outer = Block::bordered().title(" goto ");
+    let inner = outer.inner(frame.area());
+    frame.render_widget(outer, frame.area());
+
+    let [main_area, footer_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
+
+    let (list_area, detail_area) = if main_area.width >= DETAIL_MIN_TOTAL_WIDTH {
+        let detail_width = (main_area.width / 3).clamp(24, 48);
+        let [list, detail] =
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(detail_width)])
+                .areas(main_area);
+        (list, Some(detail))
+    } else {
+        (main_area, None)
+    };
     app.viewport_height = list_area.height;
 
     if app.rows().is_empty() {
@@ -76,27 +88,65 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints) {
         frame.render_stateful_widget(list, list_area, &mut state);
     }
 
+    if let Some(detail_area) = detail_area {
+        render_detail(frame, app, detail_area);
+    }
+
     let footer = Paragraph::new(hints.line()).block(Block::new().borders(Borders::TOP));
     frame.render_widget(footer, footer_area);
 }
 
-/// Centered popup with the same margins as herdr's built-in goto
-/// (`navigator_popup_rect`: width/16 and height/10, floored at 2 and 1), so
-/// the picker keeps the modal geometry users know. A plugin pane cannot
-/// float over other panes — herdr composites it as a regular (zoomed) pane —
-/// so the surround is our blank canvas rather than see-through.
-fn popup_rect(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    let margin_x = (area.width / 16).max(2);
-    let margin_y = (area.height / 10).max(1);
-    let width = area.width.saturating_sub(margin_x * 2).max(4);
-    let height = area.height.saturating_sub(margin_y * 2).max(4);
-    ratatui::layout::Rect::new(area.x + margin_x, area.y + margin_y, width, height)
-        .intersection(area)
+/// Right-hand panel describing the row under the cursor.
+fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let block = Block::new().borders(Borders::LEFT);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(row) = app.rows().get(app.cursor) else {
+        return;
+    };
+    let home = std::env::var("HOME").ok();
+    let key_width = row
+        .detail
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut lines = vec![
+        Line::styled(
+            format!(" {}", row.label),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+    for (key, value) in &row.detail {
+        let value = if *key == "cwd" {
+            shorten_home(value, home.as_deref())
+        } else {
+            value.clone()
+        };
+        lines.push(Line::raw(format!(" {key:<key_width$}  {value}")));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// `/home/user/src/repo` -> `~/src/repo` for display.
+fn shorten_home(path: &str, home: Option<&str>) -> String {
+    match home {
+        Some(home) if !home.is_empty() => match path.strip_prefix(home) {
+            Some("") => "~".to_string(),
+            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+            _ => path.to_string(),
+        },
+        _ => path.to_string(),
+    }
 }
 
 /// One row: current marker, indentation, expansion glyph, and label on the
-/// left; pane count / agent info right-aligned. Drops the right column on
-/// narrow terminals rather than wrapping.
+/// left; pane count (branches) or agent name (panes) right-aligned. Status
+/// details live in the detail panel. Drops the right column on narrow
+/// terminals rather than wrapping.
 fn row_text(row: &Row, width: usize) -> String {
     let marker = if row.is_current { "→" } else { " " };
     let indent = "  ".repeat(row.depth as usize);
@@ -113,33 +163,21 @@ fn row_text(row: &Row, width: usize) -> String {
     };
     let left = format!("{marker} {indent}{glyph}{}", row.label);
 
-    let status = status_label(row.agent_status);
     let right = if row.kind == RowKind::Pane {
-        let agent = row.agent.as_deref().unwrap_or("shell");
-        format!("{agent}  {status}")
+        row.agent.as_deref().unwrap_or("shell").to_string()
     } else {
         let panes = if row.pane_count == 1 { "pane" } else { "panes" };
-        format!("{} {panes}  {status}", row.pane_count)
+        format!("{} {panes}", row.pane_count)
     };
 
     let left_cols = left.chars().count();
     let right_cols = right.chars().count();
     if left_cols + right_cols + 2 <= width {
-        let padding = width - left_cols - right_cols;
-        format!("{left}{}{right}", " ".repeat(padding))
+        let padding = width - left_cols - right_cols - 1;
+        format!("{left}{}{right} ", " ".repeat(padding))
     } else {
         // Not enough room for both: keep the labels, drop the right column.
         left.chars().take(width).collect()
-    }
-}
-
-fn status_label(status: AgentStatus) -> &'static str {
-    match status {
-        AgentStatus::Idle => "idle",
-        AgentStatus::Working => "working",
-        AgentStatus::Blocked => "blocked",
-        AgentStatus::Done => "done",
-        AgentStatus::Unknown => "unknown",
     }
 }
 
@@ -148,7 +186,7 @@ mod tests {
     use super::*;
     use crate::app::EnterOnBranch;
     use crate::config::KeysConfig;
-    use crate::herdr_client::{PaneInfo, TabInfo, WorkspaceInfo};
+    use crate::herdr_client::{AgentStatus, PaneInfo, TabInfo, WorkspaceInfo};
     use crate::tree::{InitialExpansion, Tree};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -244,15 +282,54 @@ mod tests {
         assert!(screen.contains("▼ mothership"), "screen:\n{screen}");
         assert!(screen.contains("  ▼ main"), "indented tab:\n{screen}");
         assert!(screen.contains("    pane 1"), "indented pane:\n{screen}");
-        assert!(screen.contains("2 panes  working"), "tab column:\n{screen}");
+        assert!(screen.contains("2 panes"), "tab pane count:\n{screen}");
+        let lines = buffer_lines(&terminal);
+        let pane2 = lines.iter().find(|l| l.contains("pane 2")).unwrap();
+        assert!(pane2.contains("shell"), "agentless column: {pane2:?}");
+    }
+
+    #[test]
+    fn detail_panel_describes_the_row_under_the_cursor() {
+        let mut app = sample_app(); // cursor on the focused pane (pane 1)
+        let terminal = render(100, 24, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(screen.contains("w1:p1"), "selected pane id:\n{screen}");
+        assert!(screen.contains("agent"), "screen:\n{screen}");
+        assert!(screen.contains("claude"), "screen:\n{screen}");
+        assert!(screen.contains("status"), "screen:\n{screen}");
+        assert!(screen.contains("idle"), "screen:\n{screen}");
+    }
+
+    #[test]
+    fn narrow_terminal_hides_the_detail_panel() {
+        let mut app = sample_app();
+        let terminal = render(50, 12, &mut app);
+        let screen = screen(&terminal);
+
         assert!(
-            screen.contains("claude  idle"),
-            "agent pane column:\n{screen}"
+            !screen.contains("w1:p1"),
+            "no detail ids on a narrow screen:\n{screen}"
         );
         assert!(
-            screen.contains("shell  idle"),
-            "agentless column:\n{screen}"
+            screen.contains("mothership"),
+            "list still renders:\n{screen}"
         );
+    }
+
+    #[test]
+    fn shorten_home_replaces_the_home_prefix() {
+        assert_eq!(
+            shorten_home("/home/u/src/repo", Some("/home/u")),
+            "~/src/repo"
+        );
+        assert_eq!(shorten_home("/home/u", Some("/home/u")), "~");
+        assert_eq!(
+            shorten_home("/home/unrelated/x", Some("/home/u")),
+            "/home/unrelated/x",
+            "prefix must match a whole path component"
+        );
+        assert_eq!(shorten_home("/tmp/x", None), "/tmp/x");
     }
 
     #[test]
@@ -279,11 +356,16 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         let lines = buffer_lines(&terminal);
+        // "    pane 1" (indented) is the list row; the detail panel header
+        // also says "pane 1" but without the tree indentation.
         let cursor_y = lines
             .iter()
-            .position(|line| line.contains("pane 1"))
+            .position(|line| line.contains("    pane 1"))
             .expect("cursor row must be on screen") as u16;
-        let x = lines[cursor_y as usize].find('p').unwrap() as u16;
+        let x = lines[cursor_y as usize]
+            .chars()
+            .position(|c| c == 'p')
+            .unwrap() as u16;
         let style = buffer.cell((x, cursor_y)).unwrap().style();
         assert!(
             style.add_modifier.contains(Modifier::REVERSED),
@@ -297,9 +379,9 @@ mod tests {
         let terminal = render(80, 24, &mut app);
         let lines = buffer_lines(&terminal);
 
-        let current = lines.iter().find(|l| l.contains("pane 1")).unwrap();
+        let current = lines.iter().find(|l| l.contains("    pane 1")).unwrap();
         assert!(current.contains("→"), "current row: {current:?}");
-        let other = lines.iter().find(|l| l.contains("pane 2")).unwrap();
+        let other = lines.iter().find(|l| l.contains("    pane 2")).unwrap();
         assert!(!other.contains("→"), "other row: {other:?}");
     }
 
@@ -369,25 +451,7 @@ mod tests {
             screen.contains("pane 20"),
             "row under cursor must be scrolled into view:\n{screen}"
         );
-        // 12 rows, popup margin 1 top+bottom -> 10, minus borders (2) and
-        // footer (2) -> 6.
-        assert_eq!(app.viewport_height, 6);
-    }
-
-    #[test]
-    fn popup_is_centered_with_builtin_goto_margins() {
-        let mut app = sample_app();
-        let terminal = render(80, 24, &mut app);
-        let lines = buffer_lines(&terminal);
-
-        // 80x24: margin_x = max(80/16, 2) = 5, margin_y = max(24/10, 1) = 2.
-        let char_at = |y: usize, x: usize| lines[y].chars().nth(x).unwrap();
-        assert_eq!(char_at(2, 5), '┌', "top-left corner at (5,2)");
-        assert_eq!(char_at(21, 5), '└', "bottom-left corner at (5,21)");
-        assert_eq!(lines[0].trim(), "", "surround above the popup stays blank");
-        assert!(
-            lines[2].chars().take(5).all(|c| c == ' '),
-            "surround left of the popup stays blank"
-        );
+        // 12 rows minus top/bottom border (2) and footer (2) -> 8.
+        assert_eq!(app.viewport_height, 8);
     }
 }

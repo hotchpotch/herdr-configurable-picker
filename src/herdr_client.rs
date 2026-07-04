@@ -27,6 +27,18 @@ pub enum AgentStatus {
     Unknown,
 }
 
+impl AgentStatus {
+    pub fn name(self) -> &'static str {
+        match self {
+            AgentStatus::Idle => "idle",
+            AgentStatus::Working => "working",
+            AgentStatus::Blocked => "blocked",
+            AgentStatus::Done => "done",
+            AgentStatus::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct WorkspaceInfo {
     pub workspace_id: String,

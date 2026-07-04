@@ -63,6 +63,8 @@ pub struct Row {
     /// (or none when the snapshot has no focused workspace).
     pub is_current: bool,
     pub focus_target: FocusTarget,
+    /// Key/value pairs for the detail panel, in display order.
+    pub detail: Vec<(&'static str, String)>,
 }
 
 #[derive(Debug)]
@@ -187,6 +189,12 @@ impl Tree {
                 pane: None,
             };
             let ws_info = ws.info.as_ref();
+            let ws_pane_count = ws_info
+                .map(|i| i.pane_count)
+                .unwrap_or_else(|| ws.tabs.iter().map(|t| t.info.pane_count).sum());
+            let ws_status = ws_info
+                .map(|i| i.agent_status)
+                .unwrap_or(AgentStatus::Unknown);
             rows.push(Row {
                 path: ws_path,
                 kind: RowKind::Workspace,
@@ -194,15 +202,23 @@ impl Tree {
                 label: ws.label.clone(),
                 expandable: !ws.tabs.is_empty(),
                 expanded: ws.expanded,
-                pane_count: ws_info
-                    .map(|i| i.pane_count)
-                    .unwrap_or_else(|| ws.tabs.iter().map(|t| t.info.pane_count).sum()),
+                pane_count: ws_pane_count,
                 agent: None,
-                agent_status: ws_info
-                    .map(|i| i.agent_status)
-                    .unwrap_or(AgentStatus::Unknown),
+                agent_status: ws_status,
                 is_current: current == Some(ws_path),
                 focus_target: FocusTarget::Workspace(ws.workspace_id.clone()),
+                detail: vec![
+                    ("id", ws.workspace_id.clone()),
+                    (
+                        "tabs",
+                        ws_info
+                            .map(|i| i.tab_count)
+                            .unwrap_or(ws.tabs.len())
+                            .to_string(),
+                    ),
+                    ("panes", ws_pane_count.to_string()),
+                    ("status", ws_status.name().to_string()),
+                ],
             });
             if !ws.expanded {
                 continue;
@@ -225,6 +241,12 @@ impl Tree {
                     agent_status: tab.info.agent_status,
                     is_current: current == Some(tab_path),
                     focus_target: FocusTarget::Tab(tab.info.tab_id.clone()),
+                    detail: vec![
+                        ("id", tab.info.tab_id.clone()),
+                        ("workspace", ws.label.clone()),
+                        ("panes", tab.info.pane_count.to_string()),
+                        ("status", tab.info.agent_status.name().to_string()),
+                    ],
                 });
                 if !tab.expanded {
                     continue;
@@ -235,6 +257,27 @@ impl Tree {
                         tab: Some(tab_idx),
                         pane: Some(pane_idx),
                     };
+                    let agent = pane
+                        .info
+                        .display_agent
+                        .clone()
+                        .or_else(|| pane.info.agent.clone());
+                    let mut detail = vec![
+                        ("id", pane.info.pane_id.clone()),
+                        (
+                            "agent",
+                            agent.clone().unwrap_or_else(|| "shell".to_string()),
+                        ),
+                        ("status", pane.info.agent_status.name().to_string()),
+                    ];
+                    if let Some(cwd) = &pane.info.cwd {
+                        detail.push(("cwd", cwd.clone()));
+                    }
+                    if let Some(title) = &pane.info.title {
+                        if !title.is_empty() {
+                            detail.push(("title", title.clone()));
+                        }
+                    }
                     rows.push(Row {
                         path: pane_path,
                         kind: RowKind::Pane,
@@ -243,14 +286,11 @@ impl Tree {
                         expandable: false,
                         expanded: false,
                         pane_count: 0,
-                        agent: pane
-                            .info
-                            .display_agent
-                            .clone()
-                            .or_else(|| pane.info.agent.clone()),
+                        agent,
                         agent_status: pane.info.agent_status,
                         is_current: current == Some(pane_path),
                         focus_target: FocusTarget::Pane(pane.info.pane_id.clone()),
+                        detail,
                     });
                 }
             }
@@ -726,6 +766,45 @@ mod tests {
 
         assert_eq!(panes.len(), 2, "nothing looks like a focused overlay");
         assert!(panes[0].focused);
+    }
+
+    #[test]
+    fn rows_carry_detail_pairs_for_the_detail_panel() {
+        let mut with_meta = pane("w1:p1", "w1:t1", "w1", true, Some("claude"));
+        with_meta.cwd = Some("/home/u/repo".to_string());
+        with_meta.title = Some("make -j8".to_string());
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "alpha", true)],
+            vec![tab("w1:t1", "w1", 1, "a-one", true, 2)],
+            vec![with_meta, pane("w1:p2", "w1:t1", "w1", false, None)],
+            InitialExpansion::All,
+        );
+        let rows = tree.visible_rows();
+
+        assert_eq!(rows[0].detail[0], ("id", "w1".to_string()));
+        assert!(rows[0].detail.contains(&("status", "unknown".to_string())));
+
+        assert_eq!(rows[1].detail[0], ("id", "w1:t1".to_string()));
+        assert!(rows[1].detail.contains(&("workspace", "alpha".to_string())));
+        assert!(rows[1].detail.contains(&("panes", "2".to_string())));
+
+        assert_eq!(
+            rows[2].detail,
+            vec![
+                ("id", "w1:p1".to_string()),
+                ("agent", "claude".to_string()),
+                ("status", "idle".to_string()),
+                ("cwd", "/home/u/repo".to_string()),
+                ("title", "make -j8".to_string()),
+            ]
+        );
+
+        let agentless = &rows[3].detail;
+        assert!(agentless.contains(&("agent", "shell".to_string())));
+        assert!(
+            agentless.iter().all(|(k, _)| *k != "cwd" && *k != "title"),
+            "absent metadata stays out of the panel: {agentless:?}"
+        );
     }
 
     #[test]
