@@ -50,12 +50,36 @@ pub struct TabInfo {
     pub agent_status: AgentStatus,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PaneInfo {
+    pub pane_id: String,
+    pub tab_id: String,
+    pub workspace_id: String,
+    pub focused: bool,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub display_agent: Option<String>,
+    pub agent_status: AgentStatus,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub terminal_id: String,
+}
+
 /// The herdr calls the picker needs. `main` talks to this trait so tests can
 /// substitute a mock; `SocketClient` is the real implementation.
 pub trait HerdrApi {
     fn list_workspaces(&mut self) -> Result<Vec<WorkspaceInfo>>;
     fn list_tabs(&mut self) -> Result<Vec<TabInfo>>;
+    fn list_panes(&mut self) -> Result<Vec<PaneInfo>>;
+    fn focus_workspace(&mut self, workspace_id: &str) -> Result<()>;
     fn focus_tab(&mut self, tab_id: &str) -> Result<()>;
+    /// Socket-only method (no CLI equivalent); works for agentless panes too.
+    fn focus_pane(&mut self, pane_id: &str) -> Result<()>;
 }
 
 /// Builds one request line (without the trailing newline).
@@ -163,10 +187,25 @@ impl HerdrApi for SocketClient {
         extract_payload(&result, "tab_list", "tabs")
     }
 
+    fn list_panes(&mut self) -> Result<Vec<PaneInfo>> {
+        let result = self.call("pane.list", json!({}))?;
+        extract_payload(&result, "pane_list", "panes")
+    }
+
+    fn focus_workspace(&mut self, workspace_id: &str) -> Result<()> {
+        self.call("workspace.focus", json!({"workspace_id": workspace_id}))?;
+        Ok(())
+    }
+
     fn focus_tab(&mut self, tab_id: &str) -> Result<()> {
         // Any success result means the focus landed; the payload shape is
         // herdr's business.
         self.call("tab.focus", json!({"tab_id": tab_id}))?;
+        Ok(())
+    }
+
+    fn focus_pane(&mut self, pane_id: &str) -> Result<()> {
+        self.call("pane.focus", json!({"pane_id": pane_id}))?;
         Ok(())
     }
 }
@@ -296,6 +335,47 @@ mod tests {
     }
 
     #[test]
+    fn pane_list_fixture_parses_with_optional_fields_absent_or_present() {
+        // First pane: agentless shell with the optional fields missing.
+        // Second: agent pane with everything set, plus invented fields.
+        let result: Value = serde_json::from_str(
+            r#"{
+                "type": "pane_list",
+                "panes": [{
+                    "pane_id": "w1:p1",
+                    "tab_id": "w1:t1",
+                    "workspace_id": "w1",
+                    "focused": false,
+                    "agent_status": "unknown",
+                    "terminal_id": "term_a",
+                    "revision": 3
+                }, {
+                    "pane_id": "w1:p2",
+                    "tab_id": "w1:t1",
+                    "workspace_id": "w1",
+                    "focused": true,
+                    "agent": "claude",
+                    "display_agent": "Claude",
+                    "agent_status": "working",
+                    "cwd": "/home/user/repo",
+                    "label": "builder",
+                    "title": "make -j8",
+                    "terminal_id": "term_b",
+                    "state_labels": {"future": "field"}
+                }]
+            }"#,
+        )
+        .unwrap();
+        let panes: Vec<PaneInfo> = extract_payload(&result, "pane_list", "panes").unwrap();
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0].agent, None);
+        assert_eq!(panes[0].label, None);
+        assert_eq!(panes[1].agent.as_deref(), Some("claude"));
+        assert_eq!(panes[1].agent_status, AgentStatus::Working);
+        assert!(panes[1].focused);
+    }
+
+    #[test]
     fn all_agent_status_values_parse() {
         for (text, expected) in [
             ("idle", AgentStatus::Idle),
@@ -415,6 +495,32 @@ mod tests {
         let request: Value = serde_json::from_str(&received[0]).unwrap();
         assert_eq!(request["method"], "tab.focus");
         assert_eq!(request["params"], json!({"tab_id": "w1:t2"}));
+    }
+
+    #[test]
+    fn pane_and_workspace_focus_send_socket_methods_with_targets() {
+        let (path, server) = spawn_fake_server(vec![
+            r#"{"id":"1","result":{"type":"workspace_info","workspace":{}}}"#.to_string(),
+            r#"{"id":"2","result":{"type":"pane_info","pane":{}}}"#.to_string(),
+            r#"{"id":"3","result":{"type":"pane_list","panes":[]}}"#.to_string(),
+        ]);
+
+        let mut client = SocketClient::connect(&path).unwrap();
+        client.focus_workspace("w2").unwrap();
+        client.focus_pane("w2:p3").unwrap();
+        assert!(client.list_panes().unwrap().is_empty());
+
+        let received = server.join().unwrap();
+        let requests: Vec<Value> = received
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(requests[0]["method"], "workspace.focus");
+        assert_eq!(requests[0]["params"], json!({"workspace_id": "w2"}));
+        assert_eq!(requests[1]["method"], "pane.focus");
+        assert_eq!(requests[1]["params"], json!({"pane_id": "w2:p3"}));
+        assert_eq!(requests[2]["method"], "pane.list");
+        assert_eq!(requests[2]["params"], json!({}));
     }
 
     #[test]
