@@ -139,12 +139,13 @@ impl App {
                 Outcome::Continue
             }
             KeyCode::Char(c) if key.mods.difference(KeyModifiers::SHIFT).is_empty() => {
-                let c = if key.mods.contains(KeyModifiers::SHIFT) {
-                    c.to_ascii_uppercase()
+                if key.mods.contains(KeyModifiers::SHIFT) {
+                    // Unicode-aware: canonicalization lowercased the char,
+                    // shift restores case for display (matching ignores it).
+                    self.query.extend(c.to_uppercase());
                 } else {
-                    c
-                };
-                self.query.push(c);
+                    self.query.push(c);
+                }
                 self.refresh_filter();
                 Outcome::Continue
             }
