@@ -95,6 +95,9 @@ pub struct ViewOptions {
     pub color: bool,
     /// For `~`-shortening cwd values.
     pub home: Option<String>,
+    /// Cursor-row background, current markers, separators. Configurable so
+    /// it can match the herdr theme's accent.
+    pub accent: Color,
 }
 
 impl ViewOptions {
@@ -102,6 +105,7 @@ impl ViewOptions {
         display: &DisplayConfig,
         no_color: bool,
         home: Option<String>,
+        host_accent: Option<Color>,
     ) -> (ViewOptions, Vec<String>) {
         let mut warnings = Vec::new();
         let icon_set = if display.show_agent_status {
@@ -115,6 +119,19 @@ impl ViewOptions {
         } else {
             None
         };
+        // "auto" follows the herdr theme's accent (resolved from the host
+        // config by the caller); an explicit color always wins.
+        let accent = if display.accent == "auto" {
+            host_accent.unwrap_or(Color::Cyan)
+        } else {
+            parse_color(&display.accent).unwrap_or_else(|| {
+                warnings.push(format!(
+                    "unknown accent {:?}; using \"cyan\"",
+                    display.accent
+                ));
+                Color::Cyan
+            })
+        };
         (
             ViewOptions {
                 icon_set,
@@ -122,9 +139,73 @@ impl ViewOptions {
                 show_cwd: display.show_cwd,
                 color: !no_color,
                 home,
+                accent,
             },
             warnings,
         )
+    }
+}
+
+/// Named ANSI colors and `#rrggbb` hex.
+pub(crate) fn parse_color(text: &str) -> Option<Color> {
+    let lower = text.trim().to_lowercase();
+    if let Some(hex) = lower.strip_prefix('#') {
+        // is_ascii guards the byte slicing below: "#あい" is also 6 bytes,
+        // and slicing it mid-character would panic.
+        if hex.len() == 6 && hex.is_ascii() {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            return Some(Color::Rgb(r, g, b));
+        }
+        return None;
+    }
+    match lower.as_str() {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" | "purple" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "white" => Some(Color::White),
+        "gray" | "grey" => Some(Color::Gray),
+        "darkgray" | "darkgrey" => Some(Color::DarkGray),
+        "lightred" => Some(Color::LightRed),
+        "lightgreen" => Some(Color::LightGreen),
+        "lightyellow" => Some(Color::LightYellow),
+        "lightblue" => Some(Color::LightBlue),
+        "lightmagenta" => Some(Color::LightMagenta),
+        "lightcyan" => Some(Color::LightCyan),
+        _ => None,
+    }
+}
+
+/// Black or white, whichever reads better on `background` — the built-in's
+/// panel_contrast_fg idea.
+fn contrast_fg(background: Color) -> Color {
+    match background {
+        Color::Rgb(r, g, b) => {
+            // Standard luma approximation.
+            let luma = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+            if luma > 140.0 {
+                Color::Black
+            } else {
+                Color::White
+            }
+        }
+        Color::Yellow
+        | Color::Green
+        | Color::Cyan
+        | Color::White
+        | Color::Gray
+        | Color::LightRed
+        | Color::LightGreen
+        | Color::LightYellow
+        | Color::LightBlue
+        | Color::LightMagenta
+        | Color::LightCyan => Color::Black,
+        _ => Color::White,
     }
 }
 
@@ -138,7 +219,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
     // just wastes two rows and two columns. Accent color is reserved for
     // the internal separators.
     let border_style = if view.color {
-        Style::new().fg(Color::Cyan)
+        Style::new().fg(view.accent)
     } else {
         Style::new()
     };
@@ -228,7 +309,15 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
             .iter()
             .map(|row| ListItem::new(row_line(row, width, view, tick)))
             .collect();
-        let list = List::new(items).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
+        // A solid accent bar, like the built-in's selected row. REVERSED
+        // would invert each cell's own color, leaving odd patches over the
+        // status icons; overriding fg AND bg keeps the row uniform.
+        let highlight = if view.color {
+            Style::new().bg(view.accent).fg(contrast_fg(view.accent))
+        } else {
+            Style::new().add_modifier(Modifier::REVERSED)
+        };
+        let list = List::new(items).highlight_style(highlight);
         let mut state = ListState::default().with_selected(Some(app.cursor));
         frame.render_stateful_widget(list, list_area, &mut state);
     }
@@ -268,7 +357,7 @@ fn dim_style(view: &ViewOptions) -> Style {
 /// Right-hand panel describing the row under the cursor.
 fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect, view: &ViewOptions) {
     let border_style = if view.color {
-        Style::new().fg(Color::Cyan)
+        Style::new().fg(view.accent)
     } else {
         Style::new()
     };
@@ -287,19 +376,30 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect, view
         .map(|(key, _)| key.chars().count())
         .max()
         .unwrap_or(0);
+    // Columns available for a value: panel minus the leading space, the
+    // key column, and the two-space gap.
+    let value_width = (inner.width as usize)
+        .saturating_sub(1 + key_width + 2)
+        .max(1);
 
     let mut lines = vec![
         Line::styled(
-            format!(" {}", row.label),
+            format!(
+                " {}",
+                middle_elide(&row.label, (inner.width as usize).saturating_sub(1))
+            ),
             Style::new().add_modifier(Modifier::BOLD),
         ),
         Line::raw(""),
     ];
     for (key, value) in &row.detail {
+        // Long values used to clip at the panel edge mid-path; elide them
+        // instead. Paths keep their trailing segments (the part you scan
+        // for), everything else keeps head and tail.
         let value = if *key == "cwd" {
-            shorten_home(value, view.home.as_deref())
+            elide_path(&shorten_home(value, view.home.as_deref()), value_width)
         } else {
-            value.clone()
+            middle_elide(value, value_width)
         };
         lines.push(Line::from(vec![
             Span::styled(format!(" {key:<key_width$}  "), dim_style(view)),
@@ -307,6 +407,62 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect, view
         ]));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Fits `text` into `max` columns by cutting the middle: "abc…xyz". Width
+/// math in terminal columns, not chars.
+fn middle_elide(text: &str, max: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max {
+        return text.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let head_budget = (max - 1) / 2;
+    let tail_budget = max - 1 - head_budget;
+    let head: String = truncate_to_width(text, head_budget);
+    // Walk the tail backwards until it fits its budget.
+    let mut tail_start = text.len();
+    let mut tail_cols = 0;
+    for (idx, c) in text.char_indices().rev() {
+        let cols = UnicodeWidthChar::width(c).unwrap_or(0);
+        if tail_cols + cols > tail_budget {
+            break;
+        }
+        tail_cols += cols;
+        tail_start = idx;
+    }
+    format!("{head}…{}", &text[tail_start..])
+}
+
+/// Fits a path into `max` columns fish-style: intermediate segments shrink
+/// to their first character ("~/src/github.com/yoshiori/foo" ->
+/// "~/s/g/y/foo", dot-dirs keep the dot: ".config" -> ".c"), the leaf stays
+/// whole. Falls back to [`middle_elide`] when even that is too long.
+fn elide_path(path: &str, max: usize) -> String {
+    if UnicodeWidthStr::width(path) <= max {
+        return path.to_string();
+    }
+    let segments: Vec<&str> = path.split('/').collect();
+    let last = segments.len().saturating_sub(1);
+    let shortened: Vec<String> = segments
+        .iter()
+        .enumerate()
+        .map(|(i, segment)| {
+            if i == last || *segment == "~" || segment.is_empty() {
+                (*segment).to_string()
+            } else {
+                let keep = if segment.starts_with('.') { 2 } else { 1 };
+                segment.chars().take(keep).collect()
+            }
+        })
+        .collect();
+    let shortened = shortened.join("/");
+    if UnicodeWidthStr::width(shortened.as_str()) <= max {
+        shortened
+    } else {
+        middle_elide(&shortened, max)
+    }
 }
 
 /// `/home/user/src/repo` -> `~/src/repo` for display.
@@ -330,7 +486,7 @@ fn row_line(row: &Row, width: usize, view: &ViewOptions, tick: u32) -> Line<'sta
     // the cursor itself is the reverse-video row.
     let marker = if row.is_current { "◆" } else { " " };
     let marker_style = if row.is_current && view.color {
-        Style::new().fg(Color::Cyan)
+        Style::new().fg(view.accent)
     } else {
         Style::new()
     };
@@ -566,6 +722,7 @@ mod tests {
             show_cwd: false,
             color: false,
             home: Some("/home/u".to_string()),
+            accent: Color::Cyan,
         }
     }
 
@@ -722,13 +879,13 @@ mod tests {
             icon_set: "comic-sans".to_string(),
             ..Default::default()
         };
-        let (view, warnings) = ViewOptions::from_config(&display, false, None);
+        let (view, warnings) = ViewOptions::from_config(&display, false, None, None);
         assert_eq!(view.icon_set, Some(IconSet::Nerd));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("comic-sans"));
 
         display.show_agent_status = false;
-        let (view, warnings) = ViewOptions::from_config(&display, true, None);
+        let (view, warnings) = ViewOptions::from_config(&display, true, None, None);
         assert_eq!(view.icon_set, None, "hidden icons skip validation");
         assert!(warnings.is_empty());
         assert!(!view.color, "NO_COLOR disables color");
@@ -1133,6 +1290,109 @@ mod tests {
         assert!(
             logs_row.contains("2 panes · 1 blocked"),
             "tab pane count with activity: {logs_row:?}"
+        );
+    }
+
+    #[test]
+    fn parse_color_accepts_names_and_hex() {
+        assert_eq!(parse_color("cyan"), Some(Color::Cyan));
+        assert_eq!(parse_color("Magenta"), Some(Color::Magenta));
+        assert_eq!(parse_color("purple"), Some(Color::Magenta));
+        assert_eq!(parse_color("#bd93f9"), Some(Color::Rgb(0xbd, 0x93, 0xf9)));
+        assert_eq!(parse_color("#bad"), None, "short hex unsupported");
+        assert_eq!(
+            parse_color("#あい"),
+            None,
+            "6 BYTES of non-ASCII must not panic the byte slicing"
+        );
+        assert_eq!(parse_color("mauve-ish"), None);
+    }
+
+    #[test]
+    fn cursor_row_is_a_solid_accent_bar_not_reversed() {
+        let mut app = sample_app(); // cursor on the claude pane row
+        let accent = Color::Rgb(0xbd, 0x93, 0xf9);
+        let view = ViewOptions {
+            color: true,
+            accent,
+            ..plain_view()
+        };
+        let terminal = render_with(80, 24, &mut app, &view);
+        let buffer = terminal.backend().buffer();
+        let lines = buffer_lines(&terminal);
+        let y = lines.iter().position(|l| l.contains("✓ claude")).unwrap() as u16;
+
+        // Every cell of the row — icon included — sits on the accent
+        // background with the contrast foreground; no inverted patches.
+        let icon_x = lines[y as usize].chars().position(|c| c == '✓').unwrap() as u16;
+        for x in [0, icon_x, icon_x + 2] {
+            let style = buffer.cell((x, y)).unwrap().style();
+            assert_eq!(style.bg, Some(accent), "cell {x} bg");
+            assert_eq!(style.fg, Some(contrast_fg(accent)), "cell {x} fg");
+        }
+
+        // The accent config reaches the warning path too.
+        let display = DisplayConfig {
+            accent: "mauve-ish".to_string(),
+            ..Default::default()
+        };
+        let (view, warnings) = ViewOptions::from_config(&display, false, None, None);
+        assert_eq!(view.accent, Color::Cyan);
+        assert!(warnings.iter().any(|w| w.contains("mauve-ish")));
+    }
+
+    #[test]
+    fn middle_elide_keeps_head_and_tail_within_budget() {
+        assert_eq!(middle_elide("short", 10), "short");
+        let elided = middle_elide("abcdefghijklmnop", 9);
+        assert_eq!(elided, "abcd…mnop");
+        assert!(UnicodeWidthStr::width(elided.as_str()) <= 9);
+        // Double-width chars count as two columns.
+        let elided = middle_elide("日本語のラベルです", 9);
+        assert!(UnicodeWidthStr::width(elided.as_str()) <= 9, "{elided}");
+        assert!(elided.contains('…'));
+        assert_eq!(middle_elide("anything", 1), "…");
+    }
+
+    #[test]
+    fn elide_path_shortens_segments_fish_style() {
+        assert_eq!(elide_path("~/src/repo", 20), "~/src/repo", "fits as-is");
+        assert_eq!(
+            elide_path("~/src/github.com/yoshiori/picker", 20),
+            "~/s/g/y/picker"
+        );
+        assert_eq!(elide_path("/home/u/src/repo", 12), "/h/u/s/repo");
+        assert_eq!(
+            elide_path("~/.config/herdr/scripts", 15),
+            "~/.c/h/scripts",
+            "dot-dirs keep the dot"
+        );
+        // Even fish-style is too long: fall back to the middle cut.
+        let elided = elide_path("~/x/very-long-repository-name", 12);
+        assert!(elided.contains('…'), "{elided}");
+        assert!(UnicodeWidthStr::width(elided.as_str()) <= 12, "{elided}");
+    }
+
+    #[test]
+    fn detail_panel_elides_long_cwds_keeping_the_tail() {
+        let mut long_cwd = pane("w1:p1", "w1:t1", "w1", true, Some("claude"));
+        long_cwd.cwd = Some("/home/u/src/github.com/yoshiori/picker-repo".to_string());
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "mothership", true)],
+            vec![
+                tab("w1:t1", "w1", 1, "main", true),
+                tab("w1:t2", "w1", 2, "logs", false),
+            ],
+            vec![long_cwd, pane("w1:p2", "w1:t1", "w1", false, None)],
+            InitialExpansion::All,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+        let terminal = render(100, 24, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(
+            screen.contains("~/s/g/y/picker-repo"),
+            "cwd shortens fish-style, keeping the leaf:\n{screen}"
         );
     }
 

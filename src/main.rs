@@ -4,6 +4,7 @@
 mod app;
 mod config;
 mod herdr_client;
+mod host_theme;
 mod icons;
 mod keymap;
 mod search;
@@ -73,8 +74,16 @@ fn main() -> ExitCode {
         });
     // NO_COLOR per https://no-color.org: present and non-empty disables color.
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
-    let (view, mut view_warnings) =
-        ui::ViewOptions::from_config(&config.display, no_color, std::env::var("HOME").ok());
+    // With accent = "auto", follow the herdr theme's accent (read from the
+    // host config — 0.7.1 has no theme API for plugins).
+    let host_accent = std::env::var_os("HERDR_PLUGIN_CONFIG_DIR")
+        .and_then(|dir| host_theme::host_accent(Path::new(&dir)));
+    let (view, mut view_warnings) = ui::ViewOptions::from_config(
+        &config.display,
+        no_color,
+        std::env::var("HOME").ok(),
+        host_accent,
+    );
     warnings.append(&mut view_warnings);
     report_warnings(&warnings);
 
