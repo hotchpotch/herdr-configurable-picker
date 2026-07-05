@@ -1367,11 +1367,10 @@ mod tests {
                                     // and 50 wide keeps the detail panel away from the right edge.
         let terminal = render(50, 8, &mut app);
         let lines = buffer_lines(&terminal);
-        for y in 2..6 {
+        for (y, line) in lines.iter().enumerate().take(6).skip(2) {
             assert!(
-                lines[y].ends_with('▕'),
-                "scrollbar in the last column of line {y}: {:?}",
-                lines[y]
+                line.ends_with('▕'),
+                "scrollbar in the last column of line {y}: {line:?}"
             );
         }
 
