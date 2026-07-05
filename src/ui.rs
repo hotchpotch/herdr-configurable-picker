@@ -213,6 +213,9 @@ fn contrast_fg(background: Color) -> Color {
 /// splitting off; below it the list gets the whole canvas.
 const DETAIL_MIN_TOTAL_WIDTH: u16 = 60;
 
+/// Room for the right-aligned "N panes " header counter.
+const COUNT_WIDTH: u16 = 12;
+
 pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOptions) {
     // No frame of our own: herdr already draws pane chrome (border + the
     // manifest pane title) around this canvas, and a second box inside it
@@ -243,7 +246,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
         let header_inner = header_block.inner(header_area);
         frame.render_widget(header_block, header_area);
         let [prompt_area, count_area] =
-            Layout::horizontal([Constraint::Min(1), Constraint::Length(8)]).areas(header_inner);
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(COUNT_WIDTH)])
+                .areas(header_inner);
         if let Some(status) = app.state_filter {
             // Active state filter (b/w/i/d): show which one.
             let style = match status_color(status) {
@@ -276,7 +280,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), prompt_area);
         }
-        let count = Paragraph::new(format!("{} ", app.rows().len()))
+        // The built-in shows the total pane count here, not the number of
+        // visible rows — it stays put while filters narrow the list.
+        let count = Paragraph::new(format!("{} panes ", app.pane_count()))
             .style(dim_style(view))
             .alignment(ratatui::layout::Alignment::Right);
         frame.render_widget(count, count_area);
@@ -1039,8 +1045,10 @@ mod tests {
             "header: {:?}",
             lines[0]
         );
+        // The count is the total pane count, like the built-in — not the
+        // number of visible rows.
         assert!(
-            lines[0].trim_end().ends_with(&app.rows().len().to_string()),
+            lines[0].trim_end().ends_with("3 panes"),
             "count at the right edge: {:?}",
             lines[0]
         );
@@ -1048,6 +1056,29 @@ mod tests {
             lines[2].contains("mothership"),
             "the list starts below the header rule: {:?}",
             lines[1]
+        );
+    }
+
+    #[test]
+    fn pane_count_in_the_header_ignores_active_filters() {
+        use crate::keymap::{parse_key_spec, Keymaps};
+        let keys = KeysConfig::default();
+        let (normal, _) = Keymap::from_bindings(&keys.to_bindings());
+        let (search, _) = Keymap::from_bindings(&keys.to_search_bindings());
+        let keymaps = Keymaps { normal, search };
+
+        let mut app = sample_app();
+        for spec in ["/", "z", "z"] {
+            let key = parse_key_spec(spec).unwrap().0[0];
+            app.handle_key(&keymaps, key);
+        }
+        assert!(app.rows().is_empty());
+        let terminal = render(80, 24, &mut app);
+        let lines = buffer_lines(&terminal);
+        assert!(
+            lines[0].trim_end().ends_with("3 panes"),
+            "the total stays put under a filter: {:?}",
+            lines[0]
         );
     }
 
@@ -1239,21 +1270,21 @@ mod tests {
         assert!(screen.contains("⊙ working"), "filter line:\n{screen}");
         let lines = buffer_lines(&terminal);
         assert!(
-            lines[0].trim_end().ends_with(&app.rows().len().to_string()),
-            "match count at the right edge: {:?}",
+            lines[0].trim_end().ends_with("3 panes"),
+            "pane total at the right edge: {:?}",
             lines[0]
         );
     }
 
     #[test]
-    fn search_line_shows_the_match_count() {
+    fn search_line_keeps_the_pane_total() {
         let mut app = sample_app();
         app.mode = Mode::Search;
         app.query = "x".to_string();
         let terminal = render(80, 24, &mut app);
         let lines = buffer_lines(&terminal);
         assert!(
-            lines[0].trim_end().ends_with(&app.rows().len().to_string()),
+            lines[0].trim_end().ends_with("3 panes"),
             "count next to the prompt: {:?}",
             lines[0]
         );

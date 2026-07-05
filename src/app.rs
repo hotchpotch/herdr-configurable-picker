@@ -90,6 +90,11 @@ impl App {
         &self.rows
     }
 
+    /// Total pane count for the header, unaffected by filters.
+    pub fn pane_count(&self) -> usize {
+        self.tree.pane_count()
+    }
+
     /// Swaps in a freshly fetched snapshot (the built-in recomputes its
     /// rows from live state every frame; polling is our equivalent).
     /// Preserves the user's expansion choices, the node under the cursor,

@@ -129,6 +129,16 @@ pub struct Tree {
 }
 
 impl Tree {
+    /// Total pane count across all workspaces, for the header — the
+    /// built-in counts every pane there, regardless of active filters.
+    pub fn pane_count(&self) -> usize {
+        self.workspaces
+            .iter()
+            .flat_map(|ws| ws.tabs.iter())
+            .map(|tab| tab.panes.len())
+            .sum()
+    }
+
     /// Joins the snapshot, sorting workspaces and tabs by their numbers and
     /// keeping panes in API order within each tab.
     pub fn build(
