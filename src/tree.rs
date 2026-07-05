@@ -81,6 +81,23 @@ pub struct Row {
     /// (deepest rows only): true when that ancestor still has visible
     /// siblings below, i.e. the guide column needs a `│` continuation.
     pub ancestor_continues: Vec<bool>,
+    /// Branch rows: "N blocked · M working · K done" over contained panes
+    /// (the built-in's activity summary); empty when nothing is going on.
+    pub activity: String,
+    /// What text search matches against: label plus the meta column,
+    /// lowercased — mirrors the built-in's `search_text`.
+    pub search_text: String,
+}
+
+/// Which rows [`Tree::build_rows`] keeps.
+#[derive(Debug, Clone, Copy)]
+enum RowFilter<'a> {
+    /// Expansion-based view.
+    None,
+    /// Multi-word AND text query over each node's search text.
+    Text(&'a str),
+    /// Only nodes whose (aggregate) agent status equals this.
+    State(AgentStatus),
 }
 
 #[derive(Debug)]
@@ -221,29 +238,30 @@ impl Tree {
     }
 
     pub fn visible_rows(&self) -> Vec<Row> {
-        self.build_rows(None)
+        self.build_rows(RowFilter::None)
     }
 
-    /// Search view: a node is visible iff its own label matches or any
-    /// descendant's does (ancestors of matches come along for context;
-    /// children of a matching branch do not). Collapse state is ignored
-    /// while a filter is active. Empty query = the normal expansion view.
+    /// Search view: a node is visible iff its own search text (label plus
+    /// the meta column, like the built-in) matches or any descendant's does
+    /// (ancestors of matches come along for context; children of a matching
+    /// branch do not). Matching is multi-word AND. Collapse state is
+    /// ignored while a filter is active. Empty query = the expansion view.
     pub fn visible_rows_filtered(&self, query: &str) -> Vec<Row> {
         if query.is_empty() {
-            self.build_rows(None)
+            self.build_rows(RowFilter::None)
         } else {
-            self.build_rows(Some(query))
+            self.build_rows(RowFilter::Text(query))
         }
     }
 
-    fn build_rows(&self, filter: Option<&str>) -> Vec<Row> {
-        // No current marker while filtering: the whole point of a filter is
-        // navigating away, and the current chain may not even be visible.
-        let current = if filter.is_none() {
-            self.current_visible_path()
-        } else {
-            None
-        };
+    /// State-filter view (the built-in's b/w/i/d keys): only nodes whose
+    /// (aggregate) agent status equals `status`, with the same
+    /// ancestor-reveal rules as text search.
+    pub fn visible_rows_state_filtered(&self, status: AgentStatus) -> Vec<Row> {
+        self.build_rows(RowFilter::State(status))
+    }
+
+    fn build_rows(&self, filter: RowFilter) -> Vec<Row> {
         let mut rows = Vec::new();
         for (ws_idx, ws) in self.workspaces.iter().enumerate() {
             // Like the built-in goto (navigator_child_rows: `multi_tab =
@@ -255,27 +273,64 @@ impl Tree {
             // (tab row shown, per-pane shown) for this workspace under
             // `filter`. For single-tab workspaces the tab row is never
             // shown, and its label is not searchable either.
+            // Meta/search text per tab, computed up front because both the
+            // visibility pass and the row construction need them.
+            let tab_metas: Vec<(String, String)> = ws
+                .tabs
+                .iter()
+                .map(|tab| {
+                    let activity =
+                        activity_summary(tab.panes.iter().map(|pane| pane.info.agent_status));
+                    let meta = if activity.is_empty() {
+                        format!("{} panes", tab.info.pane_count)
+                    } else {
+                        format!("{} panes · {}", tab.info.pane_count, activity)
+                    };
+                    let search = format!("{} {}", tab.info.label, meta).to_lowercase();
+                    (activity, search)
+                })
+                .collect();
+            let ws_activity = activity_summary(
+                ws.tabs
+                    .iter()
+                    .flat_map(|tab| tab.panes.iter())
+                    .map(|pane| pane.info.agent_status),
+            );
+            let ws_search = format!("{} {}", ws.label, ws_activity).to_lowercase();
+
             let tab_states: Vec<(bool, Vec<bool>)> = ws
                 .tabs
                 .iter()
-                .map(|tab| match filter {
-                    Option::None => (
+                .zip(&tab_metas)
+                .map(|(tab, (_, tab_search))| match filter {
+                    RowFilter::None => (
                         !single_tab && ws.expanded,
                         tab.panes
                             .iter()
                             .map(|_| ws.expanded && (single_tab || tab.expanded))
                             .collect(),
                     ),
-                    Some(query) => {
+                    RowFilter::Text(query) => {
                         let pane_shown: Vec<bool> = tab
                             .panes
                             .iter()
                             .map(|pane| {
-                                crate::search::label_matches(&pane_label(&pane.info), query)
+                                crate::search::query_matches(&pane_search_text(&pane.info), query)
                             })
                             .collect();
                         let tab_shown = !single_tab
-                            && (crate::search::label_matches(&tab.info.label, query)
+                            && (crate::search::query_matches(tab_search, query)
+                                || pane_shown.iter().any(|&shown| shown));
+                        (tab_shown, pane_shown)
+                    }
+                    RowFilter::State(status) => {
+                        let pane_shown: Vec<bool> = tab
+                            .panes
+                            .iter()
+                            .map(|pane| pane.info.agent_status == status)
+                            .collect();
+                        let tab_shown = !single_tab
+                            && (tab.info.agent_status == status
                                 || pane_shown.iter().any(|&shown| shown));
                         (tab_shown, pane_shown)
                     }
@@ -284,9 +339,17 @@ impl Tree {
             let any_child_shown = tab_states
                 .iter()
                 .any(|(tab_shown, panes)| *tab_shown || panes.iter().any(|&shown| shown));
+            let ws_status_agg = ws
+                .info
+                .as_ref()
+                .map(|i| i.agent_status)
+                .unwrap_or(AgentStatus::Unknown);
             let ws_shown = match filter {
-                Option::None => true,
-                Some(query) => crate::search::label_matches(&ws.label, query) || any_child_shown,
+                RowFilter::None => true,
+                RowFilter::Text(query) => {
+                    crate::search::query_matches(&ws_search, query) || any_child_shown
+                }
+                RowFilter::State(status) => ws_status_agg == status || any_child_shown,
             };
             if !ws_shown {
                 continue;
@@ -315,13 +378,15 @@ impl Tree {
                     !ws.tabs.is_empty()
                 },
                 expanded: match filter {
-                    Option::None => ws.expanded,
-                    Some(_) => any_child_shown,
+                    RowFilter::None => ws.expanded,
+                    _ => any_child_shown,
                 },
                 pane_count: ws_pane_count,
                 agent: None,
                 agent_status: ws_status,
-                is_current: current == Some(ws_path),
+                // Like the built-in: the active workspace carries a current
+                // marker of its own, filters included.
+                is_current: ws_info.is_some_and(|i| i.focused),
                 focus_target: FocusTarget::Workspace(ws.workspace_id.clone()),
                 detail: vec![
                     ("id", ws.workspace_id.clone()),
@@ -339,9 +404,11 @@ impl Tree {
                 custom_status: None,
                 last_child: false,
                 ancestor_continues: Vec::new(),
+                activity: ws_activity,
+                search_text: ws_search,
             });
-            for (tab_idx, (tab, (tab_shown, pane_shown))) in
-                ws.tabs.iter().zip(&tab_states).enumerate()
+            for (tab_idx, ((tab, (tab_shown, pane_shown)), (tab_activity, tab_search))) in
+                ws.tabs.iter().zip(&tab_states).zip(&tab_metas).enumerate()
             {
                 if *tab_shown {
                     let tab_path = NodePath {
@@ -357,13 +424,14 @@ impl Tree {
                         label: tab.info.label.clone(),
                         expandable: !tab.panes.is_empty(),
                         expanded: match filter {
-                            Option::None => tab.expanded,
-                            Some(_) => any_pane_shown,
+                            RowFilter::None => tab.expanded,
+                            _ => any_pane_shown,
                         },
                         pane_count: tab.info.pane_count,
                         agent: None,
                         agent_status: tab.info.agent_status,
-                        is_current: current == Some(tab_path),
+                        // The built-in never marks tab rows as current.
+                        is_current: false,
                         focus_target: FocusTarget::Tab(tab.info.tab_id.clone()),
                         detail: vec![
                             ("id", tab.info.tab_id.clone()),
@@ -375,6 +443,8 @@ impl Tree {
                         custom_status: None,
                         last_child: false,
                         ancestor_continues: Vec::new(),
+                        activity: tab_activity.clone(),
+                        search_text: tab_search.clone(),
                     });
                 }
                 for (pane_idx, pane) in tab.panes.iter().enumerate() {
@@ -423,7 +493,10 @@ impl Tree {
                         pane_count: 0,
                         agent,
                         agent_status: pane.info.agent_status,
-                        is_current: current == Some(pane_path),
+                        // PaneInfo.focused is globally unique (active
+                        // workspace + tab + pane), same as the built-in's
+                        // is_active_pane.
+                        is_current: pane.info.focused,
                         focus_target: FocusTarget::Pane {
                             pane_id: pane.info.pane_id.clone(),
                             tab_id: pane.info.tab_id.clone(),
@@ -433,6 +506,8 @@ impl Tree {
                         custom_status: pane.info.custom_status.clone(),
                         last_child: false,
                         ancestor_continues: Vec::new(),
+                        activity: String::new(),
+                        search_text: pane_search_text(&pane.info),
                     });
                 }
             }
@@ -441,66 +516,12 @@ impl Tree {
         rows
     }
 
-    /// The deepest node on the focused chain whose row is visible: the
-    /// focused pane if its tab is open, else that tab if its workspace is
-    /// open, else the focused workspace itself.
-    fn current_visible_path(&self) -> Option<NodePath> {
-        let ws_idx = self
-            .workspaces
-            .iter()
-            .position(|ws| ws.info.as_ref().is_some_and(|i| i.focused))?;
-        let ws = &self.workspaces[ws_idx];
-        if !ws.expanded {
-            return Some(NodePath {
-                ws: ws_idx,
-                tab: None,
-                pane: None,
-            });
-        }
-        let Some(tab_idx) = ws.tabs.iter().position(|tab| tab.info.focused) else {
-            return Some(NodePath {
-                ws: ws_idx,
-                tab: None,
-                pane: None,
-            });
-        };
-        let tab = &ws.tabs[tab_idx];
-        // Single-tab workspaces have no tab row: the fallback for "panes
-        // hidden / no focused pane" is the workspace itself, and pane
-        // visibility follows the workspace's expansion alone.
-        let single_tab = ws.info.is_some() && ws.tabs.len() == 1;
-        let branch_path = if single_tab {
-            NodePath {
-                ws: ws_idx,
-                tab: None,
-                pane: None,
-            }
-        } else {
-            NodePath {
-                ws: ws_idx,
-                tab: Some(tab_idx),
-                pane: None,
-            }
-        };
-        if !single_tab && !tab.expanded {
-            return Some(branch_path);
-        }
-        match tab.panes.iter().position(|pane| pane.info.focused) {
-            Some(pane_idx) => Some(NodePath {
-                ws: ws_idx,
-                tab: Some(tab_idx),
-                pane: Some(pane_idx),
-            }),
-            None => Some(branch_path),
-        }
-    }
-
-    /// Index of the current row (deepest visible focused node), or 0.
+    /// Index of the starting row: the current pane if visible, else the
+    /// current workspace (both carry `is_current`; the pane row is deeper
+    /// and therefore later), or 0.
     pub fn initial_cursor(&self) -> usize {
-        self.visible_rows()
-            .iter()
-            .position(|row| row.is_current)
-            .unwrap_or(0)
+        let rows = self.visible_rows();
+        rows.iter().rposition(|row| row.is_current).unwrap_or(0)
     }
 
     fn expanded_flag(&mut self, path: NodePath) -> Option<&mut bool> {
@@ -643,6 +664,52 @@ fn annotate_guides(rows: &mut [Row]) {
     }
 }
 
+/// The built-in's activity summary: counts of blocked/working/done panes,
+/// joined as "N blocked · M working · K done"; empty when all quiet
+/// (idle-and-seen and unknown panes are not counted).
+fn activity_summary(statuses: impl Iterator<Item = AgentStatus>) -> String {
+    let (mut blocked, mut working, mut done) = (0usize, 0usize, 0usize);
+    for status in statuses {
+        match status {
+            AgentStatus::Blocked => blocked += 1,
+            AgentStatus::Working => working += 1,
+            AgentStatus::Done => done += 1,
+            AgentStatus::Idle | AgentStatus::Unknown => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if blocked > 0 {
+        parts.push(format!("{blocked} blocked"));
+    }
+    if working > 0 {
+        parts.push(format!("{working} working"));
+    }
+    if done > 0 {
+        parts.push(format!("{done} done"));
+    }
+    parts.join(" · ")
+}
+
+/// The pane's meta column: "{agent} · {status}" or bare "shell".
+fn pane_meta(info: &PaneInfo) -> String {
+    let agent = info.display_agent.as_deref().or(info.agent.as_deref());
+    match agent {
+        Some(agent) => {
+            let status = info
+                .custom_status
+                .clone()
+                .unwrap_or_else(|| info.agent_status.name().to_string());
+            format!("{agent} · {status}")
+        }
+        None => "shell".to_string(),
+    }
+}
+
+/// What text search sees for a pane: label + meta, like the built-in.
+fn pane_search_text(info: &PaneInfo) -> String {
+    format!("{} {}", pane_label(info), pane_meta(info)).to_lowercase()
+}
+
 /// Pane display label, mirroring the built-in goto's chain
 /// (`navigator_pane_rows_for_tab`): effective title -> manual label ->
 /// agent label -> "pane N" from the public id suffix ("w1:p8" -> "pane 8").
@@ -734,7 +801,7 @@ mod tests {
                 pane("w1:p1", "w1:t1", "w1", true, Some("claude")),
                 pane("w1:p2", "w1:t1", "w1", false, None),
                 pane("w1:p3", "w1:t2", "w1", false, None),
-                pane("w2:p1", "w2:t1", "w2", true, None),
+                pane("w2:p1", "w2:t1", "w2", false, None),
             ],
             initial,
         )
@@ -790,11 +857,13 @@ mod tests {
         // Filtering by the hidden tab's label reveals nothing (the built-in
         // cannot match it either — the row does not exist).
         assert!(tree.visible_rows_filtered("b-one").is_empty());
-        // A pane match still reveals the chain: workspace -> pane.
-        // (w1:p1 is labeled "claude" now, so only beta's pane matches.)
+        // A pane match still reveals the chain: workspace -> pane. With
+        // meta included in search (like the built-in), "pane 1" also hits
+        // a-two's "1 panes" meta — as a tab match it does not reveal its
+        // children.
         assert_eq!(
             labels(&tree.visible_rows_filtered("pane 1")),
-            vec!["beta", "pane 1"]
+            vec!["alpha", "a-two", "beta", "pane 1"]
         );
     }
 
@@ -846,7 +915,7 @@ mod tests {
     }
 
     #[test]
-    fn is_current_marks_the_deepest_visible_focused_node() {
+    fn is_current_marks_the_active_workspace_and_pane_like_the_builtin() {
         let tree = fixture(InitialExpansion::All);
         let rows = tree.visible_rows();
         let current: Vec<&str> = rows
@@ -854,7 +923,11 @@ mod tests {
             .filter(|r| r.is_current)
             .map(|r| r.label.as_str())
             .collect();
-        assert_eq!(current, vec!["claude"], "focused pane when visible");
+        assert_eq!(
+            current,
+            vec!["alpha", "claude"],
+            "workspace AND pane carry the marker; tabs never do"
+        );
 
         let mut tree = fixture(InitialExpansion::All);
         let tab_path = tree.visible_rows()[1].path;
@@ -865,20 +938,21 @@ mod tests {
             .filter(|r| r.is_current)
             .map(|r| r.label.as_str())
             .collect();
-        assert_eq!(current, vec!["a-one"], "tab when its panes are hidden");
+        assert_eq!(
+            current,
+            vec!["alpha"],
+            "hidden pane leaves only the workspace marked"
+        );
 
-        let tree = fixture(InitialExpansion::None);
-        let rows = tree.visible_rows();
-        let current: Vec<&str> = rows
-            .iter()
-            .filter(|r| r.is_current)
-            .map(|r| r.label.as_str())
-            .collect();
-        assert_eq!(current, vec!["alpha"], "workspace when all collapsed");
+        // Unlike before, the marker survives an active filter.
+        let tree = fixture(InitialExpansion::All);
+        let rows = tree.visible_rows_filtered("alpha");
+        assert!(rows.iter().any(|r| r.is_current), "marker under filter");
     }
 
     #[test]
-    fn initial_cursor_sits_on_the_current_row() {
+    fn initial_cursor_sits_on_the_deepest_current_row() {
+        // Both alpha (ws) and claude (pane) are current; the pane wins.
         assert_eq!(fixture(InitialExpansion::All).initial_cursor(), 2);
         assert_eq!(fixture(InitialExpansion::None).initial_cursor(), 0);
         let empty = Tree::build(vec![], vec![], vec![], InitialExpansion::All);
@@ -997,7 +1071,7 @@ mod tests {
             .filter(|r| r.is_current)
             .map(|r| r.label.as_str())
             .collect();
-        assert_eq!(current, vec!["pane 1"]);
+        assert_eq!(current, vec!["alpha", "pane 1"]);
     }
 
     #[test]
@@ -1066,6 +1140,64 @@ mod tests {
             labels(&tree.visible_rows_filtered("")),
             labels(&tree.visible_rows())
         );
+    }
+
+    #[test]
+    fn state_filter_shows_matching_nodes_with_ancestors() {
+        let mut blocked = pane("w1:p1", "w1:t1", "w1", true, Some("claude"));
+        blocked.agent_status = AgentStatus::Blocked;
+        let tree = Tree::build(
+            vec![
+                workspace("w1", 1, "alpha", true),
+                workspace("w2", 2, "beta", false),
+            ],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true, 2),
+                tab("w1:t2", "w1", 2, "a-two", false, 1),
+                tab("w2:t1", "w2", 1, "b-one", true, 1),
+            ],
+            vec![
+                blocked,
+                pane("w1:p2", "w1:t1", "w1", false, None),
+                pane("w2:p1", "w2:t1", "w2", false, None),
+            ],
+            InitialExpansion::None, // collapse must not matter
+        );
+
+        let rows = tree.visible_rows_state_filtered(AgentStatus::Blocked);
+        assert_eq!(labels(&rows), vec!["alpha", "a-one", "claude"]);
+        assert!(tree
+            .visible_rows_state_filtered(AgentStatus::Working)
+            .is_empty());
+    }
+
+    #[test]
+    fn activity_summaries_count_blocked_working_done() {
+        let mut blocked = pane("w1:p1", "w1:t1", "w1", true, Some("claude"));
+        blocked.agent_status = AgentStatus::Blocked;
+        let mut working = pane("w1:p2", "w1:t1", "w1", false, Some("claude"));
+        working.agent_status = AgentStatus::Working;
+        let mut done = pane("w1:p3", "w1:t2", "w1", false, Some("claude"));
+        done.agent_status = AgentStatus::Done;
+        let idle = pane("w1:p4", "w1:t2", "w1", false, Some("claude"));
+
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "alpha", true)],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true, 2),
+                tab("w1:t2", "w1", 2, "a-two", false, 2),
+            ],
+            vec![blocked, working, done, idle],
+            InitialExpansion::All,
+        );
+        let rows = tree.visible_rows();
+
+        assert_eq!(rows[0].activity, "1 blocked · 1 working · 1 done");
+        assert_eq!(rows[1].activity, "1 blocked · 1 working", "tab a-one");
+        let a_two = rows.iter().find(|r| r.label == "a-two").unwrap();
+        assert_eq!(a_two.activity, "1 done", "idle-and-seen is not counted");
+        // Search sees the activity too (meta is part of search_text).
+        assert!(rows[0].search_text.contains("1 blocked"));
     }
 
     #[test]

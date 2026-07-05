@@ -33,9 +33,11 @@ This plugin binds to a separate key and lets you rebind every action — `up`, `
 
 ## Features
 
-- Tree of `workspace → tab → pane` with expand / collapse per branch (`initial_expansion` configurable).
-- `/` search: case-insensitive substring filter that keeps ancestors of matches visible; `ctrl+n`/`ctrl+p`/arrows/`enter` keep working inside the prompt.
-- Jumps to any node: workspaces, tabs, and panes — including agentless panes, via the socket-only `pane.focus`.
+- Tree of `workspace → tab → pane` with expand / collapse per branch (`initial_expansion` configurable) and tree-command style guide rails.
+- `/` search over labels *and* meta (agent names, states, pane counts) with multi-word AND — `/moth work` intersects; `ctrl+n`/`ctrl+p`/arrows/`enter` keep working inside the prompt.
+- State filters (`b`/`w`/`i`/`d`, rebindable): show only blocked / working / idle / done agents; `a` clears.
+- Live view: statuses, labels, and panes refresh about once a second while open, with an animated spinner for working agents and per-branch activity summaries (`2 working · 1 blocked`).
+- Jumps to any node: workspaces, tabs, and panes — including agentless panes, via the socket-only `pane.focus` (with a `tab.focus` fallback for herdr ≤ 0.7.1).
 - A detail panel shows the selected node's id, agent, status, and cwd.
 - Status icons in three sets (`nerd` / `ascii` / `emoji`), status colors, `NO_COLOR` support, and `[display]` toggles for icons, pane counts, and cwd.
 - No external runtime dependencies (single Rust binary; TUI via [`ratatui`](https://ratatui.rs/)).
@@ -90,6 +92,12 @@ cancel    = ["esc", "ctrl+c", "ctrl+g"]
 search_start = ["/"]
 search_clear = ["ctrl+u"]
 search_exit  = ["esc"]
+
+filter_blocked = ["b"]
+filter_working = ["w"]
+filter_idle    = ["i"]
+filter_done    = ["d"]
+filter_clear   = ["a"]
 ```
 
 Broken or conflicting keys are disabled with a warning (also logged to `$HERDR_PLUGIN_STATE_DIR/picker.log`); the rest keep working. Full config schema in [SPEC.md](./SPEC.md#plugin-config-herdr_plugin_config_dirconfigtoml).

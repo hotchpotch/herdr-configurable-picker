@@ -103,6 +103,14 @@ search_start = ["/"]
 search_clear = ["ctrl+u"]     # only active while search mode is focused
 search_exit  = ["esc"]        # returns to normal mode, keeps current filter result
 
+# State filters (the built-in's b/w/i/d/a): show only nodes whose agents
+# are in the given state. Mutually exclusive with text search.
+filter_blocked = ["b"]
+filter_working = ["w"]
+filter_idle    = ["i"]
+filter_done    = ["d"]
+filter_clear   = ["a"]
+
 [display]
 show_pane_count   = true
 show_agent_status = true
@@ -229,7 +237,9 @@ herdr answers a request it cannot parse (e.g. an unknown method) with an `invali
      bindings like `ctrl+n`/`ctrl+p`, arrows, and `enter` keep moving,
      accepting, and cancelling without leaving the prompt (chords do not
      fire inside search mode).
-- **Matching**: case-insensitive substring against each node's label. A node is visible if it or any descendant matches; ancestors of a match stay visible so context is preserved. Children of a matching branch are *not* revealed — jump to the branch itself. Collapse state is ignored while a filter is active; the user's expansion state is untouched and returns when the query clears.
+- **Matching**: like the built-in's `text_matches_query` — the query is split on whitespace and every word must appear (case-insensitive) in the node's *search text*, which is the label plus the meta column (`claude · idle`, `2 panes · 1 working`, …). So `/blocked` finds stuck agents and `/moth work` intersects. A node is visible if it or any descendant matches; ancestors of a match stay visible so context is preserved. Children of a matching branch are *not* revealed — jump to the branch itself. Collapse state is ignored while a filter is active; the user's expansion state is untouched and returns when the query clears.
+- **Match count**: shown at the right edge of the prompt line.
+- **State filters**: `filter_blocked`/`_working`/`_idle`/`_done` (default `b`/`w`/`i`/`d`) show only nodes whose (aggregate) agent state matches, with the same ancestor-reveal rules; `filter_clear` (default `a`) drops the filter. Text search and state filters are mutually exclusive — starting one drops the other, and mode/filter keys keep working even when the current filter matches nothing.
 - Cursor auto-moves to the first visible *match* (not a context-only ancestor) after each keystroke.
 - `search_exit` returns to normal mode; the filter result stays. `search_clear` empties the query.
 - No current-tab marker while a filter is active (the point of filtering is going somewhere else).

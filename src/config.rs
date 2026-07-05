@@ -50,6 +50,14 @@ search_start = ["/"]
 search_clear = ["ctrl+u"]
 search_exit  = ["esc"]
 
+# State filters: show only nodes whose agents are in the given state.
+# Mutually exclusive with text search (starting one drops the other).
+filter_blocked = ["b"]
+filter_working = ["w"]
+filter_idle    = ["i"]
+filter_done    = ["d"]
+filter_clear   = ["a"]
+
 [display]
 show_pane_count   = true
 show_agent_status = true
@@ -91,6 +99,11 @@ pub struct KeysConfig {
     pub search_start: Vec<String>,
     pub search_clear: Vec<String>,
     pub search_exit: Vec<String>,
+    pub filter_blocked: Vec<String>,
+    pub filter_working: Vec<String>,
+    pub filter_idle: Vec<String>,
+    pub filter_done: Vec<String>,
+    pub filter_clear: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -130,6 +143,11 @@ impl Default for KeysConfig {
             search_start: keys(&["/"]),
             search_clear: keys(&["ctrl+u"]),
             search_exit: keys(&["esc"]),
+            filter_blocked: keys(&["b"]),
+            filter_working: keys(&["w"]),
+            filter_idle: keys(&["i"]),
+            filter_done: keys(&["d"]),
+            filter_clear: keys(&["a"]),
         }
     }
 }
@@ -171,6 +189,11 @@ impl KeysConfig {
             (Action::Accept, self.accept.clone()),
             (Action::Cancel, self.cancel.clone()),
             (Action::SearchStart, self.search_start.clone()),
+            (Action::FilterBlocked, self.filter_blocked.clone()),
+            (Action::FilterWorking, self.filter_working.clone()),
+            (Action::FilterIdle, self.filter_idle.clone()),
+            (Action::FilterDone, self.filter_done.clone()),
+            (Action::FilterClear, self.filter_clear.clone()),
         ]
     }
 
@@ -275,6 +298,11 @@ mod tests {
                 Action::Accept,
                 Action::Cancel,
                 Action::SearchStart,
+                Action::FilterBlocked,
+                Action::FilterWorking,
+                Action::FilterIdle,
+                Action::FilterDone,
+                Action::FilterClear,
             ]
         );
         assert_eq!(bindings[0].1, vec!["down", "ctrl+n", "j"]);
