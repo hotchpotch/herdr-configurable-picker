@@ -29,6 +29,13 @@ pub enum Action {
     SearchClear,
     /// Search mode only: back to normal mode, keeping the filter.
     SearchExit,
+    /// Normal mode: show only nodes in the given agent state.
+    FilterBlocked,
+    FilterWorking,
+    FilterIdle,
+    FilterDone,
+    /// Normal mode: drop the state filter.
+    FilterClear,
 }
 
 /// A single canonicalized key press.

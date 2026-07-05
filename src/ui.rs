@@ -37,9 +37,26 @@ impl FooterHints {
             (Action::Expand, "expand"),
             (Action::Collapse, "collapse"),
             (Action::SearchStart, "search"),
-            (Action::Accept, "accept"),
-            (Action::Cancel, "cancel"),
         ] {
+            if let Some(key) = keymap.first_binding_label(action) {
+                entries.push((key, label.to_string()));
+            }
+        }
+        // The state filters collapse into one "b/w/i/d/a states" hint.
+        let filter_keys: Vec<String> = [
+            Action::FilterBlocked,
+            Action::FilterWorking,
+            Action::FilterIdle,
+            Action::FilterDone,
+            Action::FilterClear,
+        ]
+        .into_iter()
+        .filter_map(|action| keymap.first_binding_label(action))
+        .collect();
+        if !filter_keys.is_empty() {
+            entries.push((filter_keys.join("/"), "states".to_string()));
+        }
+        for (action, label) in [(Action::Accept, "accept"), (Action::Cancel, "cancel")] {
             if let Some(key) = keymap.first_binding_label(action) {
                 entries.push((key, label.to_string()));
             }
@@ -48,18 +65,20 @@ impl FooterHints {
     }
 
     /// Keys pop (bold), action words recede (dim): the keys are what the
-    /// eye is hunting for in a hint line.
-    fn line(&self, view: &ViewOptions) -> Line<'static> {
+    /// eye is hunting for in a hint line. Borrows from `self` — the line
+    /// is consumed within the same draw call.
+    fn line<'a>(&'a self, view: &ViewOptions) -> Line<'a> {
         let mut spans = Vec::new();
         for (i, (key, action)) in self.entries.iter().enumerate() {
             if i > 0 {
                 spans.push(Span::raw("   "));
             }
             spans.push(Span::styled(
-                key.clone(),
+                key.as_str(),
                 Style::new().add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled(format!(" {action}"), dim_style(view)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(action.as_str(), dim_style(view)));
         }
         Line::from(spans)
     }
@@ -125,9 +144,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
     };
     let inner = frame.area();
 
-    // The search prompt line exists while the prompt is focused or a filter
-    // is still applied, so the user can always see why rows are missing.
-    let show_search = app.mode == Mode::Search || !app.query.is_empty();
+    // The filter line exists while the prompt is focused or any filter
+    // (text or state) is applied, so the user can always see why rows are
+    // missing — plus the match count on the right.
+    let show_search =
+        app.mode == Mode::Search || !app.query.is_empty() || app.state_filter.is_some();
     let (search_area, main_area, footer_area) = if show_search {
         let [search, main, footer] = Layout::vertical([
             Constraint::Length(1),
@@ -143,22 +164,42 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
     };
 
     if let Some(search_area) = search_area {
-        // The trailing bar marks the prompt as focused (typing goes here);
-        // the query is the content, the "/" just furniture.
-        let focused = app.mode == Mode::Search;
-        let query_style = if focused {
-            Style::new().add_modifier(Modifier::BOLD)
+        // Match count at the right edge, like the built-in's header.
+        let [prompt_area, count_area] =
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(8)]).areas(search_area);
+        if let Some(status) = app.state_filter {
+            // Active state filter (b/w/i/d): show which one.
+            let style = match status_color(status) {
+                Some(color) if view.color => Style::new().fg(color),
+                _ => Style::new(),
+            };
+            let spans = vec![
+                Span::styled(" ⊙ ", dim_style(view)),
+                Span::styled(status.name(), style.add_modifier(Modifier::BOLD)),
+            ];
+            frame.render_widget(Paragraph::new(Line::from(spans)), prompt_area);
         } else {
-            Style::new().add_modifier(Modifier::DIM)
-        };
-        let mut spans = vec![
-            Span::styled(" / ", dim_style(view)),
-            Span::styled(app.query.clone(), query_style),
-        ];
-        if focused {
-            spans.push(Span::raw("▏"));
+            // The trailing bar marks the prompt as focused (typing goes
+            // here); the query is the content, the "/" just furniture.
+            let focused = app.mode == Mode::Search;
+            let query_style = if focused {
+                Style::new().add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().add_modifier(Modifier::DIM)
+            };
+            let mut spans = vec![
+                Span::styled(" / ", dim_style(view)),
+                Span::styled(app.query.as_str(), query_style),
+            ];
+            if focused {
+                spans.push(Span::raw("▏"));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), prompt_area);
         }
-        frame.render_widget(Paragraph::new(Line::from(spans)), search_area);
+        let count = Paragraph::new(format!("{} ", app.rows().len()))
+            .style(dim_style(view))
+            .alignment(ratatui::layout::Alignment::Right);
+        frame.render_widget(count, count_area);
     }
 
     let (list_area, detail_area) = if main_area.width >= DETAIL_MIN_TOTAL_WIDTH {
@@ -173,7 +214,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
     app.viewport_height = list_area.height;
 
     if app.rows().is_empty() {
-        let placeholder = if app.query.is_empty() {
+        let placeholder = if app.query.is_empty() && app.state_filter.is_none() {
             "No workspaces found."
         } else {
             "No matches."
@@ -285,7 +326,9 @@ fn shorten_home(path: &str, home: Option<&str>) -> String {
 /// (panes) right-aligned and dimmed. Drops the right column on narrow
 /// terminals rather than wrapping.
 fn row_line(row: &Row, width: usize, view: &ViewOptions, tick: u32) -> Line<'static> {
-    let marker = if row.is_current { "→" } else { " " };
+    // ◆ marks where you came from (workspace and pane), like the built-in;
+    // the cursor itself is the reverse-video row.
+    let marker = if row.is_current { "◆" } else { " " };
     let marker_style = if row.is_current && view.color {
         Style::new().fg(Color::Cyan)
     } else {
@@ -382,12 +425,21 @@ fn right_column(row: &Row, view: &ViewOptions) -> String {
             }
             _ => base,
         }
-    } else if row.kind == RowKind::Tab && view.show_pane_count {
-        let panes = if row.pane_count == 1 { "pane" } else { "panes" };
-        format!("{} {panes}", row.pane_count)
+    } else if row.kind == RowKind::Tab {
+        // "N panes · 1 blocked · 2 working", either part optional.
+        let mut parts = Vec::new();
+        if view.show_pane_count {
+            let panes = if row.pane_count == 1 { "pane" } else { "panes" };
+            parts.push(format!("{} {panes}", row.pane_count));
+        }
+        if !row.activity.is_empty() {
+            parts.push(row.activity.clone());
+        }
+        parts.join(" · ")
     } else {
-        // Workspace counts live in the label suffix, like the built-in.
-        String::new()
+        // Workspace counts live in the label suffix, like the built-in;
+        // the right column carries the activity summary.
+        row.activity.clone()
     }
 }
 
@@ -740,15 +792,19 @@ mod tests {
     }
 
     #[test]
-    fn current_row_carries_a_marker() {
+    fn current_workspace_and_pane_carry_the_diamond_marker() {
         let mut app = sample_app();
         let terminal = render(80, 24, &mut app);
         let lines = buffer_lines(&terminal);
 
+        let ws = lines.iter().find(|l| l.contains("mothership")).unwrap();
+        assert!(ws.contains("◆"), "current workspace row: {ws:?}");
         let current = lines.iter().find(|l| l.contains("✓ claude")).unwrap();
-        assert!(current.contains("→"), "current row: {current:?}");
+        assert!(current.contains("◆"), "current pane row: {current:?}");
         let other = lines.iter().find(|l| l.contains("✓ pane 2")).unwrap();
-        assert!(!other.contains("→"), "other row: {other:?}");
+        assert!(!other.contains("◆"), "other row: {other:?}");
+        let tab = lines.iter().find(|l| l.contains("⠋ main")).unwrap();
+        assert!(!tab.contains("◆"), "tabs never carry the marker: {tab:?}");
     }
 
     #[test]
@@ -997,6 +1053,86 @@ mod tests {
         assert!(
             style.add_modifier.contains(Modifier::BOLD),
             "hint keys are bold: {style:?}"
+        );
+    }
+
+    #[test]
+    fn state_filter_line_shows_status_and_count() {
+        use crate::keymap::{parse_key_spec, Keymaps};
+        let keys = KeysConfig::default();
+        let (normal, _) = Keymap::from_bindings(&keys.to_bindings());
+        let (search, _) = Keymap::from_bindings(&keys.to_search_bindings());
+        let keymaps = Keymaps { normal, search };
+
+        let mut app = sample_app(); // tab "main"/"logs" are Working
+        let key = parse_key_spec("w").unwrap().0[0];
+        app.handle_key(&keymaps, key);
+        let terminal = render(80, 24, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(screen.contains("⊙ working"), "filter line:\n{screen}");
+        let lines = buffer_lines(&terminal);
+        assert!(
+            lines[0].trim_end().ends_with(&app.rows().len().to_string()),
+            "match count at the right edge: {:?}",
+            lines[0]
+        );
+    }
+
+    #[test]
+    fn search_line_shows_the_match_count() {
+        let mut app = sample_app();
+        app.mode = Mode::Search;
+        app.query = "x".to_string();
+        let terminal = render(80, 24, &mut app);
+        let lines = buffer_lines(&terminal);
+        assert!(
+            lines[0].trim_end().ends_with(&app.rows().len().to_string()),
+            "count next to the prompt: {:?}",
+            lines[0]
+        );
+    }
+
+    #[test]
+    fn footer_collapses_state_filters_into_one_hint() {
+        let mut app = sample_app();
+        let terminal = render(80, 24, &mut app);
+        assert!(
+            screen(&terminal).contains("b/w/i/d/a states"),
+            "screen:\n{}",
+            screen(&terminal)
+        );
+    }
+
+    #[test]
+    fn workspace_right_column_shows_the_activity_summary() {
+        let mut blocked = pane("w1:p3", "w1:t2", "w1", false, Some("claude"));
+        blocked.agent_status = AgentStatus::Blocked;
+        let mut ws = workspace("w1", 1, "mothership", true);
+        ws.pane_count = 3;
+        let tree = Tree::build(
+            vec![ws],
+            vec![
+                tab("w1:t1", "w1", 1, "main", true),
+                tab("w1:t2", "w1", 2, "logs", false),
+            ],
+            vec![
+                pane("w1:p1", "w1:t1", "w1", true, Some("claude")),
+                pane("w1:p2", "w1:t1", "w1", false, None),
+                blocked,
+            ],
+            InitialExpansion::All,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+        let terminal = render(100, 24, &mut app);
+        let lines = buffer_lines(&terminal);
+
+        let ws_row = lines.iter().find(|l| l.contains("mothership")).unwrap();
+        assert!(ws_row.contains("1 blocked"), "ws activity: {ws_row:?}");
+        let logs_row = lines.iter().find(|l| l.contains("logs")).unwrap();
+        assert!(
+            logs_row.contains("2 panes · 1 blocked"),
+            "tab pane count with activity: {logs_row:?}"
         );
     }
 

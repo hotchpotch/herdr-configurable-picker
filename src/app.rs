@@ -3,6 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
+use crate::herdr_client::AgentStatus;
 use crate::keymap::{Action, KeyPress, Keymaps, Resolution};
 use crate::tree::{FocusTarget, NodePath, Row, RowKind, Tree};
 
@@ -57,6 +58,9 @@ pub struct App {
     enter_on_branch: EnterOnBranch,
     pub mode: Mode,
     pub query: String,
+    /// Active state filter (the built-in's b/w/i/d keys). Mutually
+    /// exclusive with the text query: setting one drops the other.
+    pub state_filter: Option<AgentStatus>,
     /// True when the snapshot itself had nothing to show (as opposed to a
     /// filter that currently matches nothing).
     tree_is_empty: bool,
@@ -77,6 +81,7 @@ impl App {
             enter_on_branch,
             mode: Mode::Normal,
             query: String::new(),
+            state_filter: None,
             tree_is_empty,
         }
     }
@@ -97,7 +102,7 @@ impl App {
             .map(|row| row.focus_target.clone());
         self.tree = tree;
         self.tree_is_empty = self.tree.visible_rows().is_empty();
-        self.rows = self.tree.visible_rows_filtered(&self.query);
+        self.refresh_rows();
         self.cursor = cursor_target
             .and_then(|target| self.rows.iter().position(|row| row.focus_target == target))
             .unwrap_or_else(|| self.cursor.min(self.rows.len().saturating_sub(1)));
@@ -178,12 +183,51 @@ impl App {
     }
 
     fn apply(&mut self, action: Action) -> Outcome {
+        // Mode and filter switches must work even when the current filter
+        // shows nothing — otherwise an empty result would trap the user
+        // with cancel as the only way out.
+        match action {
+            Action::Cancel => return Outcome::Cancel,
+            Action::SearchStart => {
+                // Text search and state filter are mutually exclusive.
+                self.state_filter = None;
+                self.mode = Mode::Search;
+                self.refresh_filter();
+                return Outcome::Continue;
+            }
+            Action::FilterBlocked => {
+                self.set_state_filter(AgentStatus::Blocked);
+                return Outcome::Continue;
+            }
+            Action::FilterWorking => {
+                self.set_state_filter(AgentStatus::Working);
+                return Outcome::Continue;
+            }
+            Action::FilterIdle => {
+                self.set_state_filter(AgentStatus::Idle);
+                return Outcome::Continue;
+            }
+            Action::FilterDone => {
+                self.set_state_filter(AgentStatus::Done);
+                return Outcome::Continue;
+            }
+            Action::FilterClear => {
+                self.state_filter = None;
+                self.refresh_rows();
+                self.cursor = self
+                    .rows
+                    .iter()
+                    .rposition(|row| row.is_current)
+                    .unwrap_or(0);
+                return Outcome::Continue;
+            }
+            // Bound only in the search table; nothing to do in normal mode.
+            Action::SearchClear | Action::SearchExit => return Outcome::Continue,
+            _ => {}
+        }
         if self.rows.is_empty() {
-            // The filter matches nothing: only cancel means anything.
-            return match action {
-                Action::Cancel => Outcome::Cancel,
-                _ => Outcome::Continue,
-            };
+            // Movement and accept mean nothing with no rows on screen.
+            return Outcome::Continue;
         }
         let last = self.rows.len() - 1;
         let page = (self.viewport_height as usize).max(1);
@@ -223,24 +267,53 @@ impl App {
                     return Outcome::Focus(row.focus_target);
                 }
             }
-            Action::Cancel => return Outcome::Cancel,
-            Action::SearchStart => self.mode = Mode::Search,
-            // Bound only in the search table; nothing to do in normal mode.
-            Action::SearchClear | Action::SearchExit => {}
+            // Handled before the empty-rows guard above.
+            Action::Cancel
+            | Action::SearchStart
+            | Action::FilterBlocked
+            | Action::FilterWorking
+            | Action::FilterIdle
+            | Action::FilterDone
+            | Action::FilterClear
+            | Action::SearchClear
+            | Action::SearchExit => unreachable!("handled before the row-dependent actions"),
         }
         Outcome::Continue
+    }
+
+    fn set_state_filter(&mut self, status: AgentStatus) {
+        self.state_filter = Some(status);
+        self.query.clear();
+        self.refresh_rows();
+        // Land on the first node actually in that state, not an ancestor
+        // shown for context.
+        self.cursor = self
+            .rows
+            .iter()
+            .position(|row| row.agent_status == status)
+            .unwrap_or(0);
+    }
+
+    /// Rows under the active filter (state filter wins; else text query).
+    fn refresh_rows(&mut self) {
+        self.rows = match self.state_filter {
+            Some(status) => self.tree.visible_rows_state_filtered(status),
+            None => self.tree.visible_rows_filtered(&self.query),
+        };
     }
 
     /// Recomputes the rows for the current query and drops the cursor on
     /// the first real match (not an ancestor shown only for context).
     fn refresh_filter(&mut self) {
-        self.rows = self.tree.visible_rows_filtered(&self.query);
+        self.refresh_rows();
         self.cursor = if self.query.is_empty() {
             self.tree.initial_cursor()
         } else {
+            // Lowercase once; search_text is stored lowercased.
+            let lowered = self.query.to_lowercase();
             self.rows
                 .iter()
-                .position(|row| crate::search::label_matches(&row.label, &self.query))
+                .position(|row| crate::search::lowered_query_matches(&row.search_text, &lowered))
                 .unwrap_or(0)
         };
     }
@@ -248,7 +321,7 @@ impl App {
     /// Rebuilds the visible rows and parks the cursor on `path` (which is
     /// always still visible after our mutations).
     fn refresh_keeping(&mut self, path: NodePath) {
-        self.rows = self.tree.visible_rows_filtered(&self.query);
+        self.refresh_rows();
         self.cursor = self
             .rows
             .iter()
@@ -574,10 +647,11 @@ mod tests {
 
         press(&mut app, &keymaps, "/");
         type_text(&mut app, &keymaps, "pane");
-        // Matches: pane 1, pane 2, pane 1 (in beta) plus ancestors.
-        assert_eq!(cursor_label(&app), "pane 1");
+        // With meta searchable, "pane" also hits the tabs' "N panes" meta;
+        // the cursor lands on the first matching row (a-one).
+        assert_eq!(cursor_label(&app), "a-one");
         press(&mut app, &keymaps, "ctrl+n");
-        assert_ne!(cursor_label(&app), "pane 1", "ctrl+n moved the cursor");
+        assert_eq!(cursor_label(&app), "pane 1", "ctrl+n moved the cursor");
 
         let outcome = press(&mut app, &keymaps, "enter");
         assert!(
@@ -684,6 +758,49 @@ mod tests {
         let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["alpha", "a-two"], "filter survives refresh");
         assert_eq!(app.query, "two");
+    }
+
+    #[test]
+    fn state_filter_keys_filter_clear_and_exclude_search() {
+        let keymaps = default_keymaps();
+        let mut blocked = pane("w2:p1", "w2:t1", "w2", false);
+        blocked.agent = Some("claude".to_string());
+        blocked.agent_status = AgentStatus::Blocked;
+        let tree = Tree::build(
+            vec![
+                workspace("w1", 1, "alpha", true),
+                workspace("w2", 2, "beta", false),
+            ],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true),
+                tab("w2:t1", "w2", 1, "b-one", true),
+            ],
+            vec![pane("w1:p1", "w1:t1", "w1", true), blocked],
+            InitialExpansion::All,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+
+        press(&mut app, &keymaps, "b");
+        assert_eq!(app.state_filter, Some(AgentStatus::Blocked));
+        let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["beta", "claude"], "blocked chain only");
+        assert_eq!(cursor_label(&app), "claude", "cursor on the blocked node");
+
+        press(&mut app, &keymaps, "a");
+        assert_eq!(app.state_filter, None);
+        assert_eq!(app.rows().len(), 4, "full tree restored");
+
+        // Entering search drops an active state filter.
+        press(&mut app, &keymaps, "w");
+        assert!(app.rows().is_empty(), "nothing is working");
+        press(&mut app, &keymaps, "/");
+        assert_eq!(app.state_filter, None);
+        assert_eq!(app.mode, Mode::Search);
+        assert_eq!(app.rows().len(), 4);
+        // ...and typing b/w/i/d in search mode edits the query instead.
+        press(&mut app, &keymaps, "b");
+        assert_eq!(app.query, "b");
+        assert_eq!(app.state_filter, None);
     }
 
     #[test]
