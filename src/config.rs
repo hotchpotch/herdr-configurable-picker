@@ -79,8 +79,9 @@ initial_expansion = "all"
 enter_on_branch = "jump"
 
 # Mouse support: hover to select, click to jump (branch carets toggle),
-# wheel to scroll. Like the built-in goto.
-mouse = true
+# wheel to scroll. "auto" follows the herdr config's [ui] mouse_capture;
+# true / false override it.
+mouse = "auto"
 "##;
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -131,7 +132,33 @@ pub struct BehaviorConfig {
     pub initial_expansion: String,
     pub enter_on_branch: String,
     /// Hover, click-to-jump, caret toggling, and wheel scrolling.
-    pub mouse: bool,
+    pub mouse: MouseConfig,
+}
+
+/// `[behavior] mouse`: `"auto"` follows the host's `[ui] mouse_capture`
+/// (like `accent = "auto"` follows the theme); plain booleans override it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MouseConfig {
+    Enabled(bool),
+    Mode(String),
+}
+
+impl MouseConfig {
+    /// On/off given the host's `[ui] mouse_capture` (None when the host
+    /// config is unreadable), plus a warning for unknown values.
+    pub fn resolve(&self, host_mouse_capture: Option<bool>) -> (bool, Option<String>) {
+        // The host itself defaults mouse_capture to true.
+        let auto = host_mouse_capture.unwrap_or(true);
+        match self {
+            MouseConfig::Enabled(enabled) => (*enabled, None),
+            MouseConfig::Mode(mode) if mode == "auto" => (auto, None),
+            MouseConfig::Mode(other) => (
+                auto,
+                Some(format!("unknown mouse {other:?}; using \"auto\"")),
+            ),
+        }
+    }
 }
 
 fn keys(specs: &[&str]) -> Vec<String> {
@@ -181,7 +208,7 @@ impl Default for BehaviorConfig {
         BehaviorConfig {
             initial_expansion: "all".to_string(),
             enter_on_branch: "jump".to_string(),
-            mouse: true,
+            mouse: MouseConfig::Mode("auto".to_string()),
         }
     }
 }
@@ -280,6 +307,29 @@ mod tests {
         assert!(!config.display.show_cwd);
         assert_eq!(config.behavior.enter_on_branch, "jump");
         assert_eq!(config.behavior.initial_expansion, "all");
+    }
+
+    #[test]
+    fn mouse_accepts_auto_bools_and_warns_on_nonsense() {
+        // "auto" (the default) follows the host's [ui] mouse_capture.
+        let auto = Config::default().behavior.mouse;
+        assert_eq!(auto.resolve(Some(false)), (false, None));
+        assert_eq!(auto.resolve(Some(true)), (true, None));
+        assert_eq!(
+            auto.resolve(None),
+            (true, None),
+            "host config unreadable: mouse on, like the host default"
+        );
+
+        // Plain booleans override the host.
+        let config: Config = toml::from_str("[behavior]\nmouse = false\n").unwrap();
+        assert_eq!(config.behavior.mouse.resolve(Some(true)), (false, None));
+
+        // Anything else warns and behaves like "auto".
+        let config: Config = toml::from_str("[behavior]\nmouse = \"sometimes\"\n").unwrap();
+        let (on, warning) = config.behavior.mouse.resolve(Some(false));
+        assert!(!on);
+        assert!(warning.unwrap().contains("sometimes"));
     }
 
     #[test]
