@@ -187,7 +187,15 @@ impl App {
         // shows nothing — otherwise an empty result would trap the user
         // with cancel as the only way out.
         match action {
-            Action::Cancel => return Outcome::Cancel,
+            Action::Cancel => {
+                // Two-stage, like the built-in: a leftover query or state
+                // filter is cleared first; only a clean esc closes.
+                if self.query.is_empty() && self.state_filter.is_none() {
+                    return Outcome::Cancel;
+                }
+                self.clear_filters();
+                return Outcome::Continue;
+            }
             Action::SearchStart => {
                 // Text search and state filter are mutually exclusive.
                 self.state_filter = None;
@@ -212,13 +220,7 @@ impl App {
                 return Outcome::Continue;
             }
             Action::FilterClear => {
-                self.state_filter = None;
-                self.refresh_rows();
-                self.cursor = self
-                    .rows
-                    .iter()
-                    .rposition(|row| row.is_current)
-                    .unwrap_or(0);
+                self.clear_filters();
                 return Outcome::Continue;
             }
             // Bound only in the search table; nothing to do in normal mode.
@@ -279,6 +281,20 @@ impl App {
             | Action::SearchExit => unreachable!("handled before the row-dependent actions"),
         }
         Outcome::Continue
+    }
+
+    /// Drops both the text query and the state filter (they are mutually
+    /// exclusive, but a leftover query survives leaving search mode) and
+    /// parks the cursor back on the current node.
+    fn clear_filters(&mut self) {
+        self.query.clear();
+        self.state_filter = None;
+        self.refresh_rows();
+        self.cursor = self
+            .rows
+            .iter()
+            .rposition(|row| row.is_current)
+            .unwrap_or(0);
     }
 
     fn set_state_filter(&mut self, status: AgentStatus) {
@@ -626,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_exits_search_keeping_the_filter_then_cancels() {
+    fn esc_exits_search_then_clears_the_filter_then_cancels() {
         let keymaps = default_keymaps();
         let mut app = app();
 
@@ -637,7 +653,29 @@ mod tests {
         assert_eq!(app.query, "two", "filter survives exiting the prompt");
         assert_eq!(app.rows().len(), 2);
 
+        // Like the built-in: esc with a leftover filter clears it first...
+        assert_eq!(press(&mut app, &keymaps, "esc"), Outcome::Continue);
+        assert_eq!(app.query, "");
+        assert_eq!(app.rows().len(), 7, "full tree restored");
+
+        // ...and only a clean esc closes the picker.
         assert_eq!(press(&mut app, &keymaps, "esc"), Outcome::Cancel);
+    }
+
+    #[test]
+    fn filter_clear_also_drops_a_leftover_query() {
+        let keymaps = default_keymaps();
+        let mut app = app();
+
+        press(&mut app, &keymaps, "/");
+        type_text(&mut app, &keymaps, "two");
+        press(&mut app, &keymaps, "esc");
+        assert_eq!(app.query, "two");
+
+        // The built-in's `a` clears the query as well as the state filter.
+        press(&mut app, &keymaps, "a");
+        assert_eq!(app.query, "");
+        assert_eq!(app.rows().len(), 7);
     }
 
     #[test]
@@ -801,6 +839,28 @@ mod tests {
         press(&mut app, &keymaps, "b");
         assert_eq!(app.query, "b");
         assert_eq!(app.state_filter, None);
+    }
+
+    #[test]
+    fn esc_and_backspace_clear_the_state_filter_before_closing() {
+        let keymaps = default_keymaps();
+        let mut app = app();
+
+        press(&mut app, &keymaps, "b");
+        assert_eq!(app.state_filter, Some(AgentStatus::Blocked));
+
+        // Backspace drops the state filter, like the built-in.
+        press(&mut app, &keymaps, "backspace");
+        assert_eq!(app.state_filter, None);
+        assert_eq!(app.rows().len(), 7);
+
+        // Esc with an active filter clears it instead of closing.
+        press(&mut app, &keymaps, "w");
+        assert_eq!(press(&mut app, &keymaps, "esc"), Outcome::Continue);
+        assert_eq!(app.state_filter, None);
+        assert_eq!(app.rows().len(), 7);
+
+        assert_eq!(press(&mut app, &keymaps, "esc"), Outcome::Cancel);
     }
 
     #[test]

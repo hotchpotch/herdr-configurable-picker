@@ -56,7 +56,7 @@ filter_blocked = ["b"]
 filter_working = ["w"]
 filter_idle    = ["i"]
 filter_done    = ["d"]
-filter_clear   = ["a"]
+filter_clear   = ["a", "backspace"]
 
 [display]
 show_pane_count   = true
@@ -153,7 +153,7 @@ impl Default for KeysConfig {
             filter_working: keys(&["w"]),
             filter_idle: keys(&["i"]),
             filter_done: keys(&["d"]),
-            filter_clear: keys(&["a"]),
+            filter_clear: keys(&["a", "backspace"]),
         }
     }
 }
