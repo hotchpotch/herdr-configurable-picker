@@ -91,8 +91,10 @@ pub struct ViewOptions {
     pub icon_set: Option<IconSet>,
     pub show_pane_count: bool,
     /// Agent/shell icon in front of the meta column and the detail
-    /// panel's agent line.
-    pub show_agent_icon: bool,
+    /// panel's agent line; `None` when `show_agent_icon = false`.
+    /// Deliberately separate from `icon_set` so `show_agent_status` and
+    /// `show_agent_icon` toggle independently.
+    pub agent_icon_set: Option<IconSet>,
     pub show_cwd: bool,
     /// False under NO_COLOR: keep the layout, drop the colors.
     pub color: bool,
@@ -111,17 +113,18 @@ impl ViewOptions {
         host_accent: Option<Color>,
     ) -> (ViewOptions, Vec<String>) {
         let mut warnings = Vec::new();
-        let icon_set = if display.show_agent_status {
-            Some(IconSet::parse(&display.icon_set).unwrap_or_else(|| {
-                warnings.push(format!(
-                    "unknown icon_set {:?}; using \"nerd\"",
-                    display.icon_set
-                ));
-                IconSet::Nerd
-            }))
-        } else {
-            None
-        };
+        let parsed_set = IconSet::parse(&display.icon_set).unwrap_or_else(|| {
+            warnings.push(format!(
+                "unknown icon_set {:?}; using \"nerd\"",
+                display.icon_set
+            ));
+            IconSet::Nerd
+        });
+        // Independent toggles over the one configured set: hiding status
+        // icons must not take the agent icons down with it (review
+        // feedback on the coupled first version).
+        let icon_set = display.show_agent_status.then_some(parsed_set);
+        let agent_icon_set = display.show_agent_icon.then_some(parsed_set);
         // "auto" follows the herdr theme's accent (resolved from the host
         // config by the caller); an explicit color always wins.
         let accent = if display.accent == "auto" {
@@ -139,7 +142,7 @@ impl ViewOptions {
             ViewOptions {
                 icon_set,
                 show_pane_count: display.show_pane_count,
-                show_agent_icon: display.show_agent_icon,
+                agent_icon_set,
                 show_cwd: display.show_cwd,
                 color: !no_color,
                 home,
@@ -480,10 +483,15 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect, view
         // column in the tree.
         if *key == "agent" {
             if let Some(icon) = agent_icon(row, view) {
+                // Emoji icons are two columns wide; measure instead of
+                // assuming one.
+                let budget = value_width
+                    .saturating_sub(UnicodeWidthStr::width(icon) + 1)
+                    .max(1);
                 lines.push(Line::from(vec![
                     key_span,
                     Span::raw(format!("{icon} ")),
-                    Span::raw(middle_elide(value, value_width.saturating_sub(2).max(1))),
+                    Span::raw(middle_elide(value, budget)),
                 ]));
                 continue;
             }
@@ -498,9 +506,14 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect, view
             let mut spans = vec![key_span];
             let mut budget = value_width;
             if let Some(set) = &view.icon_set {
-                spans.push(Span::styled(set.icon(row.agent_status, app.tick), style));
+                let icon = set.icon(row.agent_status, app.tick);
+                // Emoji status icons are two columns wide; measure
+                // instead of assuming one.
+                budget = budget
+                    .saturating_sub(UnicodeWidthStr::width(icon) + 1)
+                    .max(1);
+                spans.push(Span::styled(icon, style));
                 spans.push(Span::raw(" "));
-                budget = budget.saturating_sub(2).max(1);
             }
             spans.push(Span::styled(middle_elide(value, budget), style));
             lines.push(Line::from(spans));
@@ -675,7 +688,7 @@ fn row_line(row: &Row, width: usize, view: &ViewOptions, tick: u32) -> Line<'sta
 /// `show_agent_icon` toggle. The same convention as the user's tmux
 /// automatic-rename: 󰚩 for AI agents,  for plain shells.
 fn agent_icon(row: &Row, view: &ViewOptions) -> Option<&'static str> {
-    let set = view.icon_set.filter(|_| view.show_agent_icon)?;
+    let set = view.agent_icon_set?;
     if row.agent.is_some() {
         set.agent_icon()
     } else {
@@ -849,7 +862,7 @@ mod tests {
         ViewOptions {
             icon_set: Some(IconSet::Nerd),
             show_pane_count: true,
-            show_agent_icon: true,
+            agent_icon_set: Some(IconSet::Nerd),
             show_cwd: false,
             color: false,
             home: Some("/home/u".to_string()),
@@ -1017,8 +1030,14 @@ mod tests {
 
         display.show_agent_status = false;
         let (view, warnings) = ViewOptions::from_config(&display, true, None, None);
-        assert_eq!(view.icon_set, None, "hidden icons skip validation");
-        assert!(warnings.is_empty());
+        assert_eq!(view.icon_set, None, "status icons hidden");
+        assert_eq!(
+            view.agent_icon_set,
+            Some(IconSet::Nerd),
+            "agent icons keep the (fallback) set: the toggles are independent"
+        );
+        // The set still applies to agent icons, so the typo still warns.
+        assert_eq!(warnings.len(), 1);
         assert!(!view.color, "NO_COLOR disables color");
     }
 
@@ -1061,7 +1080,7 @@ mod tests {
     fn agent_icons_respect_the_toggle_and_the_ascii_set() {
         let mut app = sample_app();
         let view = ViewOptions {
-            show_agent_icon: false,
+            agent_icon_set: None,
             ..plain_view()
         };
         let terminal = render_with(80, 24, &mut app, &view);
@@ -1074,6 +1093,7 @@ mod tests {
         // Ascii has no one-column robot; the meta stays bare.
         let view = ViewOptions {
             icon_set: Some(IconSet::Ascii),
+            agent_icon_set: Some(IconSet::Ascii),
             ..plain_view()
         };
         let terminal = render_with(80, 24, &mut app, &view);
@@ -1082,6 +1102,25 @@ mod tests {
             ascii.contains("claude · idle") && !ascii.contains('\u{f06a9}'),
             "ascii keeps the bare meta:\n{ascii}"
         );
+    }
+
+    #[test]
+    fn agent_icons_survive_hiding_the_status_icons() {
+        // show_agent_status = false must not take the agent icons down
+        // with it: the toggles are independent.
+        let mut app = sample_app();
+        let view = ViewOptions {
+            icon_set: None,
+            agent_icon_set: Some(IconSet::Nerd),
+            ..plain_view()
+        };
+        let terminal = render_with(80, 24, &mut app, &view);
+        let screen = screen(&terminal);
+        assert!(
+            screen.contains("\u{f06a9} claude · idle"),
+            "agent icon without status icons:\n{screen}"
+        );
+        assert!(!screen.contains('✓'), "status icons stay hidden:\n{screen}");
     }
 
     #[test]
