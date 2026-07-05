@@ -207,16 +207,24 @@ impl Tree {
         };
         let mut rows = Vec::new();
         for (ws_idx, ws) in self.workspaces.iter().enumerate() {
-            // (tab shown, per-pane shown) for this workspace under `filter`.
+            // Like the built-in goto (navigator_child_rows: `multi_tab =
+            // ws.tabs.len() > 1`), a single-tab workspace skips the tab
+            // level entirely — its panes hang directly off the workspace.
+            // Placeholder workspaces (orphan tabs) keep the tab row: there
+            // the tab is the only real node.
+            let single_tab = ws.info.is_some() && ws.tabs.len() == 1;
+            // (tab row shown, per-pane shown) for this workspace under
+            // `filter`. For single-tab workspaces the tab row is never
+            // shown, and its label is not searchable either.
             let tab_states: Vec<(bool, Vec<bool>)> = ws
                 .tabs
                 .iter()
                 .map(|tab| match filter {
                     Option::None => (
-                        ws.expanded,
+                        !single_tab && ws.expanded,
                         tab.panes
                             .iter()
-                            .map(|_| ws.expanded && tab.expanded)
+                            .map(|_| ws.expanded && (single_tab || tab.expanded))
                             .collect(),
                     ),
                     Some(query) => {
@@ -227,23 +235,23 @@ impl Tree {
                                 crate::search::label_matches(&pane_label(&pane.info), query)
                             })
                             .collect();
-                        let tab_shown = crate::search::label_matches(&tab.info.label, query)
-                            || pane_shown.iter().any(|&shown| shown);
+                        let tab_shown = !single_tab
+                            && (crate::search::label_matches(&tab.info.label, query)
+                                || pane_shown.iter().any(|&shown| shown));
                         (tab_shown, pane_shown)
                     }
                 })
                 .collect();
+            let any_child_shown = tab_states
+                .iter()
+                .any(|(tab_shown, panes)| *tab_shown || panes.iter().any(|&shown| shown));
             let ws_shown = match filter {
                 Option::None => true,
-                Some(query) => {
-                    crate::search::label_matches(&ws.label, query)
-                        || tab_states.iter().any(|(shown, _)| *shown)
-                }
+                Some(query) => crate::search::label_matches(&ws.label, query) || any_child_shown,
             };
             if !ws_shown {
                 continue;
             }
-            let any_tab_shown = tab_states.iter().any(|(shown, _)| *shown);
 
             let ws_path = NodePath {
                 ws: ws_idx,
@@ -262,10 +270,14 @@ impl Tree {
                 kind: RowKind::Workspace,
                 depth: 0,
                 label: ws.label.clone(),
-                expandable: !ws.tabs.is_empty(),
+                expandable: if single_tab {
+                    !ws.tabs[0].panes.is_empty()
+                } else {
+                    !ws.tabs.is_empty()
+                },
                 expanded: match filter {
                     Option::None => ws.expanded,
-                    Some(_) => any_tab_shown,
+                    Some(_) => any_child_shown,
                 },
                 pane_count: ws_pane_count,
                 agent: None,
@@ -289,38 +301,37 @@ impl Tree {
             for (tab_idx, (tab, (tab_shown, pane_shown))) in
                 ws.tabs.iter().zip(&tab_states).enumerate()
             {
-                if !tab_shown {
-                    continue;
+                if *tab_shown {
+                    let tab_path = NodePath {
+                        ws: ws_idx,
+                        tab: Some(tab_idx),
+                        pane: None,
+                    };
+                    let any_pane_shown = pane_shown.iter().any(|&shown| shown);
+                    rows.push(Row {
+                        path: tab_path,
+                        kind: RowKind::Tab,
+                        depth: 1,
+                        label: tab.info.label.clone(),
+                        expandable: !tab.panes.is_empty(),
+                        expanded: match filter {
+                            Option::None => tab.expanded,
+                            Some(_) => any_pane_shown,
+                        },
+                        pane_count: tab.info.pane_count,
+                        agent: None,
+                        agent_status: tab.info.agent_status,
+                        is_current: current == Some(tab_path),
+                        focus_target: FocusTarget::Tab(tab.info.tab_id.clone()),
+                        detail: vec![
+                            ("id", tab.info.tab_id.clone()),
+                            ("workspace", ws.label.clone()),
+                            ("panes", tab.info.pane_count.to_string()),
+                            ("status", tab.info.agent_status.name().to_string()),
+                        ],
+                        cwd: None,
+                    });
                 }
-                let tab_path = NodePath {
-                    ws: ws_idx,
-                    tab: Some(tab_idx),
-                    pane: None,
-                };
-                let any_pane_shown = pane_shown.iter().any(|&shown| shown);
-                rows.push(Row {
-                    path: tab_path,
-                    kind: RowKind::Tab,
-                    depth: 1,
-                    label: tab.info.label.clone(),
-                    expandable: !tab.panes.is_empty(),
-                    expanded: match filter {
-                        Option::None => tab.expanded,
-                        Some(_) => any_pane_shown,
-                    },
-                    pane_count: tab.info.pane_count,
-                    agent: None,
-                    agent_status: tab.info.agent_status,
-                    is_current: current == Some(tab_path),
-                    focus_target: FocusTarget::Tab(tab.info.tab_id.clone()),
-                    detail: vec![
-                        ("id", tab.info.tab_id.clone()),
-                        ("workspace", ws.label.clone()),
-                        ("panes", tab.info.pane_count.to_string()),
-                        ("status", tab.info.agent_status.name().to_string()),
-                    ],
-                    cwd: None,
-                });
                 for (pane_idx, pane) in tab.panes.iter().enumerate() {
                     if !pane_shown[pane_idx] {
                         continue;
@@ -354,7 +365,7 @@ impl Tree {
                     rows.push(Row {
                         path: pane_path,
                         kind: RowKind::Pane,
-                        depth: 2,
+                        depth: if single_tab { 1 } else { 2 },
                         label: pane_label(&pane.info),
                         expandable: false,
                         expanded: false,
@@ -396,12 +407,25 @@ impl Tree {
             });
         };
         let tab = &ws.tabs[tab_idx];
-        if !tab.expanded {
-            return Some(NodePath {
+        // Single-tab workspaces have no tab row: the fallback for "panes
+        // hidden / no focused pane" is the workspace itself, and pane
+        // visibility follows the workspace's expansion alone.
+        let single_tab = ws.info.is_some() && ws.tabs.len() == 1;
+        let branch_path = if single_tab {
+            NodePath {
+                ws: ws_idx,
+                tab: None,
+                pane: None,
+            }
+        } else {
+            NodePath {
                 ws: ws_idx,
                 tab: Some(tab_idx),
                 pane: None,
-            });
+            }
+        };
+        if !single_tab && !tab.expanded {
+            return Some(branch_path);
         }
         match tab.panes.iter().position(|pane| pane.info.focused) {
             Some(pane_idx) => Some(NodePath {
@@ -409,11 +433,7 @@ impl Tree {
                 tab: Some(tab_idx),
                 pane: Some(pane_idx),
             }),
-            None => Some(NodePath {
-                ws: ws_idx,
-                tab: Some(tab_idx),
-                pane: None,
-            }),
+            None => Some(branch_path),
         }
     }
 
@@ -468,18 +488,31 @@ impl Tree {
         }
     }
 
+    /// The nearest *visible* ancestor: panes in a single-tab workspace skip
+    /// the (never rendered) tab level and report the workspace.
     pub fn parent_path(&self, path: NodePath) -> Option<NodePath> {
+        let ws_path = NodePath {
+            ws: path.ws,
+            tab: None,
+            pane: None,
+        };
         match (path.tab, path.pane) {
-            (Some(tab), Some(_)) => Some(NodePath {
-                ws: path.ws,
-                tab: Some(tab),
-                pane: None,
-            }),
-            (Some(_), None) => Some(NodePath {
-                ws: path.ws,
-                tab: None,
-                pane: None,
-            }),
+            (Some(tab), Some(_)) => {
+                let single_tab = self
+                    .workspaces
+                    .get(path.ws)
+                    .is_some_and(|ws| ws.info.is_some() && ws.tabs.len() == 1);
+                if single_tab {
+                    Some(ws_path)
+                } else {
+                    Some(NodePath {
+                        ws: path.ws,
+                        tab: Some(tab),
+                        pane: None,
+                    })
+                }
+            }
+            (Some(_), None) => Some(ws_path),
             _ => None,
         }
     }
@@ -616,17 +649,54 @@ mod tests {
     #[test]
     fn all_expansion_flattens_everything_in_order() {
         let rows = fixture(InitialExpansion::All).visible_rows();
+        // beta has a single tab, so (like the built-in goto) its tab row
+        // is skipped and the pane hangs directly off the workspace.
         assert_eq!(
             labels(&rows),
-            vec![
-                "alpha", "a-one", "pane 1", "pane 2", "a-two", "pane 3", "beta", "b-one", "pane 1"
-            ]
+            vec!["alpha", "a-one", "pane 1", "pane 2", "a-two", "pane 3", "beta", "pane 1"]
         );
         let depths: Vec<u8> = rows.iter().map(|r| r.depth).collect();
-        assert_eq!(depths, vec![0, 1, 2, 2, 1, 2, 0, 1, 2]);
+        assert_eq!(depths, vec![0, 1, 2, 2, 1, 2, 0, 1]);
         assert_eq!(rows[0].kind, RowKind::Workspace);
         assert_eq!(rows[1].kind, RowKind::Tab);
         assert_eq!(rows[2].kind, RowKind::Pane);
+        assert_eq!(rows[7].kind, RowKind::Pane, "beta's pane, no tab between");
+    }
+
+    #[test]
+    fn single_tab_workspace_skips_the_tab_level_like_the_builtin() {
+        // Mirrors herdr's navigator_rows_show_tab_nodes_only_for_multi_tab_workspaces.
+        let tree = fixture(InitialExpansion::All);
+        let rows = tree.visible_rows();
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.kind == RowKind::Tab && r.label == "b-one"),
+            "single-tab workspace must not render its tab row"
+        );
+        let beta_pane = rows
+            .iter()
+            .find(|r| r.kind == RowKind::Pane && r.path.ws == 1)
+            .unwrap();
+        assert_eq!(beta_pane.depth, 1, "pane sits directly under the workspace");
+        assert_eq!(
+            tree.parent_path(beta_pane.path),
+            Some(NodePath {
+                ws: 1,
+                tab: None,
+                pane: None
+            }),
+            "collapse from the pane walks to the workspace"
+        );
+
+        // Filtering by the hidden tab's label reveals nothing (the built-in
+        // cannot match it either — the row does not exist).
+        assert!(tree.visible_rows_filtered("b-one").is_empty());
+        // A pane match still reveals the chain: workspace -> pane.
+        assert_eq!(
+            labels(&tree.visible_rows_filtered("pane 1")),
+            vec!["alpha", "a-one", "pane 1", "beta", "pane 1"]
+        );
     }
 
     #[test]
@@ -744,8 +814,9 @@ mod tests {
             InitialExpansion::All,
         );
         let rows = tree.visible_rows();
-        assert_eq!(rows[2].label, "builder");
-        assert_eq!(rows[3].label, "pane 8");
+        // Single-tab workspace: panes at rows 1 and 2, no tab row.
+        assert_eq!(rows[1].label, "builder");
+        assert_eq!(rows[2].label, "pane 8");
     }
 
     #[test]
@@ -886,7 +957,12 @@ mod tests {
         with_meta.title = Some("make -j8".to_string());
         let tree = Tree::build(
             vec![workspace("w1", 1, "alpha", true)],
-            vec![tab("w1:t1", "w1", 1, "a-one", true, 2)],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true, 2),
+                // Second tab keeps the workspace multi-tab so the tab row
+                // (whose detail this test checks) actually renders.
+                tab("w1:t2", "w1", 2, "a-two", false, 0),
+            ],
             vec![with_meta, pane("w1:p2", "w1:t1", "w1", false, None)],
             InitialExpansion::All,
         );

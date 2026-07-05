@@ -285,8 +285,9 @@ mod tests {
         }
     }
 
-    /// Rows with All expansion:
-    /// 0 alpha / 1 a-one / 2 pane 1(focused) / 3 a-two / 4 pane 2 / 5 beta / 6 b-one / 7 pane 1
+    /// Rows with All expansion (beta is single-tab, so its tab row is
+    /// skipped):
+    /// 0 alpha / 1 a-one / 2 pane 1(focused) / 3 a-two / 4 pane 2 / 5 beta / 6 pane 1
     fn tree(initial: InitialExpansion) -> Tree {
         Tree::build(
             vec![
@@ -361,11 +362,11 @@ mod tests {
         press(&mut app, &keymaps, "ctrl+n");
         assert_eq!(app.cursor, 2);
         press(&mut app, &keymaps, "shift+g");
-        assert_eq!(app.cursor, 7, "bottom hits the last visible row");
+        assert_eq!(app.cursor, 6, "bottom hits the last visible row");
         press(&mut app, &keymaps, "down");
-        assert_eq!(app.cursor, 7, "down clamps at the bottom");
+        assert_eq!(app.cursor, 6, "down clamps at the bottom");
         press(&mut app, &keymaps, "ctrl+u");
-        assert_eq!(app.cursor, 4, "page up moves by viewport height");
+        assert_eq!(app.cursor, 3, "page up moves by viewport height");
     }
 
     #[test]
@@ -377,8 +378,8 @@ mod tests {
         assert_eq!(cursor_label(&app), "alpha");
         press(&mut app, &keymaps, "h");
         assert_eq!(cursor_label(&app), "alpha", "cursor stays on the branch");
-        // alpha, beta, b-one, pane 1 — alpha's own subtree is hidden.
-        assert_eq!(app.rows().len(), 4);
+        // alpha, beta, pane 1 — alpha's own subtree is hidden.
+        assert_eq!(app.rows().len(), 3);
     }
 
     #[test]
@@ -414,9 +415,9 @@ mod tests {
 
         press(&mut app, &keymaps, "home");
         press(&mut app, &keymaps, "space");
-        assert_eq!(app.rows().len(), 4);
+        assert_eq!(app.rows().len(), 3);
         press(&mut app, &keymaps, "space");
-        assert_eq!(app.rows().len(), 8);
+        assert_eq!(app.rows().len(), 7);
     }
 
     #[test]
@@ -454,7 +455,7 @@ mod tests {
 
         press(&mut app, &keymaps, "home");
         assert_eq!(press(&mut app, &keymaps, "enter"), Outcome::Continue);
-        assert_eq!(app.rows().len(), 4, "enter collapsed the workspace");
+        assert_eq!(app.rows().len(), 3, "enter collapsed the workspace");
 
         // Panes still jump.
         let mut app2 = App::new(tree(InitialExpansion::All), EnterOnBranch::Expand);
@@ -519,7 +520,7 @@ mod tests {
 
         press(&mut app, &keymaps, "ctrl+u");
         assert_eq!(app.query, "");
-        assert_eq!(app.rows().len(), 8, "clear restores the full tree");
+        assert_eq!(app.rows().len(), 7, "clear restores the full tree");
         assert_eq!(app.mode, Mode::Search, "clear keeps the prompt focused");
     }
 
@@ -570,7 +571,7 @@ mod tests {
         press(&mut app, &keymaps, "backspace");
         press(&mut app, &keymaps, "backspace");
         press(&mut app, &keymaps, "backspace");
-        assert_eq!(app.rows().len(), 8, "recovers once the query shrinks");
+        assert_eq!(app.rows().len(), 7, "recovers once the query shrinks");
     }
 
     #[test]

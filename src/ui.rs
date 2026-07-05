@@ -427,6 +427,26 @@ mod tests {
     }
 
     fn sample_app() -> App {
+        // Two tabs so the tab level actually renders (single-tab
+        // workspaces skip it, like the built-in goto).
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "mothership", true)],
+            vec![
+                tab("w1:t1", "w1", 1, "main", true),
+                tab("w1:t2", "w1", 2, "logs", false),
+            ],
+            vec![
+                pane("w1:p1", "w1:t1", "w1", true, Some("claude")),
+                pane("w1:p2", "w1:t1", "w1", false, None),
+                pane("w1:p3", "w1:t2", "w1", false, None),
+            ],
+            InitialExpansion::All,
+        );
+        App::new(tree, EnterOnBranch::Jump)
+    }
+
+    #[test]
+    fn single_tab_workspace_renders_panes_directly_under_it() {
         let tree = Tree::build(
             vec![workspace("w1", 1, "mothership", true)],
             vec![tab("w1:t1", "w1", 1, "main", true)],
@@ -436,7 +456,15 @@ mod tests {
             ],
             InitialExpansion::All,
         );
-        App::new(tree, EnterOnBranch::Jump)
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+        let terminal = render(80, 24, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(!screen.contains("main"), "no tab row:\n{screen}");
+        assert!(
+            screen.contains("  ○ pane 1"),
+            "panes at depth 1, right under the workspace:\n{screen}"
+        );
     }
 
     fn default_hints() -> FooterHints {
