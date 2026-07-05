@@ -225,29 +225,19 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
     };
     let inner = frame.area();
 
-    // The filter line exists while the prompt is focused or any filter
-    // (text or state) is applied, so the user can always see why rows are
-    // missing — plus the match count on the right.
-    let show_search =
-        app.mode == Mode::Search || !app.query.is_empty() || app.state_filter.is_some();
-    let (search_area, main_area, footer_area) = if show_search {
-        let [search, main, footer] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(2),
-        ])
-        .areas(inner);
-        (Some(search), main, footer)
-    } else {
-        let [main, footer] =
-            Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
-        (None, main, footer)
-    };
+    // The header line is always there, like the built-in's: the search
+    // prompt (a dim placeholder until it is used), or the active state
+    // filter, with the row count at the right edge.
+    let [header_area, main_area, footer_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .areas(inner);
 
-    if let Some(search_area) = search_area {
-        // Match count at the right edge, like the built-in's header.
+    {
         let [prompt_area, count_area] =
-            Layout::horizontal([Constraint::Min(1), Constraint::Length(8)]).areas(search_area);
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(8)]).areas(header_area);
         if let Some(status) = app.state_filter {
             // Active state filter (b/w/i/d): show which one.
             let style = match status_color(status) {
@@ -274,6 +264,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
             ];
             if focused {
                 spans.push(Span::raw("▏"));
+            } else if app.query.is_empty() {
+                // Idle placeholder, like the built-in's "/ search panes".
+                spans.push(Span::styled("search panes", dim_style(view)));
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), prompt_area);
         }
@@ -824,7 +817,7 @@ mod tests {
         let terminal = render_with(80, 24, &mut app, &view);
         let screen = screen(&terminal);
         assert!(screen.contains("▾ mothership"), "no icon:\n{screen}");
-        assert!(!screen.contains("panes"), "no pane counts:\n{screen}");
+        assert!(!screen.contains("2 panes"), "no pane counts:\n{screen}");
         assert!(
             !screen.contains("mothership ("),
             "no label suffix either:\n{screen}"
@@ -1029,16 +1022,26 @@ mod tests {
     }
 
     #[test]
-    fn no_search_prompt_without_a_query() {
+    fn header_always_shows_the_prompt_placeholder_and_count() {
         let mut app = sample_app();
         let terminal = render(80, 24, &mut app);
         let lines = buffer_lines(&terminal);
-        // The first line is the list, not a prompt (the footer's
-        // "/ search" hint is elsewhere).
+        // Like the built-in: an idle "/ search panes" placeholder with the
+        // row count at the right edge, before any key is pressed.
         assert!(
-            lines[0].contains("mothership"),
-            "first line: {:?}",
+            lines[0].contains("/ search panes"),
+            "header: {:?}",
             lines[0]
+        );
+        assert!(
+            lines[0].trim_end().ends_with(&app.rows().len().to_string()),
+            "count at the right edge: {:?}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("mothership"),
+            "the list starts below the header: {:?}",
+            lines[1]
         );
     }
 
@@ -1130,7 +1133,7 @@ mod tests {
             "row under cursor must be scrolled into view:\n{screen}"
         );
         // 12 rows minus the footer (2) -> 10; herdr owns the pane border.
-        assert_eq!(app.viewport_height, 10);
+        assert_eq!(app.viewport_height, 9);
     }
 
     #[test]
@@ -1146,7 +1149,7 @@ mod tests {
 
         // herdr draws the pane chrome; our canvas starts with content.
         assert!(
-            lines[0].contains("mothership"),
+            lines[1].contains("mothership"),
             "no own border, first line is the list: {:?}",
             lines[0]
         );
