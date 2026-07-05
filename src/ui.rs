@@ -287,19 +287,30 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect, view
         .map(|(key, _)| key.chars().count())
         .max()
         .unwrap_or(0);
+    // Columns available for a value: panel minus the leading space, the
+    // key column, and the two-space gap.
+    let value_width = (inner.width as usize)
+        .saturating_sub(1 + key_width + 2)
+        .max(1);
 
     let mut lines = vec![
         Line::styled(
-            format!(" {}", row.label),
+            format!(
+                " {}",
+                middle_elide(&row.label, (inner.width as usize).saturating_sub(1))
+            ),
             Style::new().add_modifier(Modifier::BOLD),
         ),
         Line::raw(""),
     ];
     for (key, value) in &row.detail {
+        // Long values used to clip at the panel edge mid-path; elide them
+        // instead. Paths keep their trailing segments (the part you scan
+        // for), everything else keeps head and tail.
         let value = if *key == "cwd" {
-            shorten_home(value, view.home.as_deref())
+            elide_path(&shorten_home(value, view.home.as_deref()), value_width)
         } else {
-            value.clone()
+            middle_elide(value, value_width)
         };
         lines.push(Line::from(vec![
             Span::styled(format!(" {key:<key_width$}  "), dim_style(view)),
@@ -307,6 +318,61 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect, view
         ]));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Fits `text` into `max` columns by cutting the middle: "abc…xyz". Width
+/// math in terminal columns, not chars.
+fn middle_elide(text: &str, max: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max {
+        return text.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let head_budget = (max - 1) / 2;
+    let tail_budget = max - 1 - head_budget;
+    let head: String = truncate_to_width(text, head_budget);
+    // Walk the tail backwards until it fits its budget.
+    let mut tail_start = text.len();
+    let mut tail_cols = 0;
+    for (idx, c) in text.char_indices().rev() {
+        let cols = UnicodeWidthChar::width(c).unwrap_or(0);
+        if tail_cols + cols > tail_budget {
+            break;
+        }
+        tail_cols += cols;
+        tail_start = idx;
+    }
+    format!("{head}…{}", &text[tail_start..])
+}
+
+/// Fits a path into `max` columns, preferring whole trailing segments
+/// ("…/herdr-configurable-picker") over a mid-segment cut; falls back to
+/// [`middle_elide`] when not even the last segment fits.
+fn elide_path(path: &str, max: usize) -> String {
+    if UnicodeWidthStr::width(path) <= max {
+        return path.to_string();
+    }
+    let mut kept = String::new();
+    for segment in path.rsplit('/') {
+        // "…/{segment}" or "…/{segment}/{kept}".
+        let separators = if kept.is_empty() { 2 } else { 3 };
+        let candidate_cols =
+            UnicodeWidthStr::width(segment) + UnicodeWidthStr::width(kept.as_str()) + separators;
+        if candidate_cols > max {
+            break;
+        }
+        kept = if kept.is_empty() {
+            segment.to_string()
+        } else {
+            format!("{segment}/{kept}")
+        };
+    }
+    if kept.is_empty() {
+        middle_elide(path, max)
+    } else {
+        format!("…/{kept}")
+    }
 }
 
 /// `/home/user/src/repo` -> `~/src/repo` for display.
@@ -1133,6 +1199,60 @@ mod tests {
         assert!(
             logs_row.contains("2 panes · 1 blocked"),
             "tab pane count with activity: {logs_row:?}"
+        );
+    }
+
+    #[test]
+    fn middle_elide_keeps_head_and_tail_within_budget() {
+        assert_eq!(middle_elide("short", 10), "short");
+        let elided = middle_elide("abcdefghijklmnop", 9);
+        assert_eq!(elided, "abcd…mnop");
+        assert!(UnicodeWidthStr::width(elided.as_str()) <= 9);
+        // Double-width chars count as two columns.
+        let elided = middle_elide("日本語のラベルです", 9);
+        assert!(UnicodeWidthStr::width(elided.as_str()) <= 9, "{elided}");
+        assert!(elided.contains('…'));
+        assert_eq!(middle_elide("anything", 1), "…");
+    }
+
+    #[test]
+    fn elide_path_prefers_whole_trailing_segments() {
+        assert_eq!(elide_path("~/src/repo", 20), "~/src/repo");
+        assert_eq!(
+            elide_path("~/src/github.com/yoshiori/picker", 20),
+            "…/yoshiori/picker"
+        );
+        assert_eq!(
+            elide_path("~/src/github.com/yoshiori/picker", 10),
+            "…/picker"
+        );
+        // Not even the last segment fits: fall back to the middle cut.
+        let elided = elide_path("~/x/very-long-repository-name", 12);
+        assert!(elided.contains('…'), "{elided}");
+        assert!(UnicodeWidthStr::width(elided.as_str()) <= 12, "{elided}");
+        assert!(!elided.starts_with("…/"), "{elided}");
+    }
+
+    #[test]
+    fn detail_panel_elides_long_cwds_keeping_the_tail() {
+        let mut long_cwd = pane("w1:p1", "w1:t1", "w1", true, Some("claude"));
+        long_cwd.cwd = Some("/home/u/src/github.com/yoshiori/picker-repo".to_string());
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "mothership", true)],
+            vec![
+                tab("w1:t1", "w1", 1, "main", true),
+                tab("w1:t2", "w1", 2, "logs", false),
+            ],
+            vec![long_cwd, pane("w1:p2", "w1:t1", "w1", false, None)],
+            InitialExpansion::All,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+        let terminal = render(100, 24, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(
+            screen.contains("…/yoshiori/picker-repo"),
+            "cwd keeps whole trailing segments:\n{screen}"
         );
     }
 
