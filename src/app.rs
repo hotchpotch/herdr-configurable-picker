@@ -52,6 +52,8 @@ pub struct App {
     /// Rows the list area can show; set by the UI on each draw so that
     /// page movements track the real terminal size.
     pub viewport_height: u16,
+    /// Redraw counter driving the working-status spinner (~8/s).
+    pub tick: u32,
     enter_on_branch: EnterOnBranch,
     pub mode: Mode,
     pub query: String,
@@ -71,6 +73,7 @@ impl App {
             cursor,
             pending: Vec::new(),
             viewport_height: 0,
+            tick: 0,
             enter_on_branch,
             mode: Mode::Normal,
             query: String::new(),

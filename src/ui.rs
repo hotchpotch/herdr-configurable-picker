@@ -181,10 +181,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
         frame.render_widget(Paragraph::new(placeholder), list_area);
     } else {
         let width = list_area.width as usize;
+        let tick = app.tick;
         let items: Vec<ListItem> = app
             .rows()
             .iter()
-            .map(|row| ListItem::new(row_line(row, width, view)))
+            .map(|row| ListItem::new(row_line(row, width, view, tick)))
             .collect();
         let list = List::new(items).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
         let mut state = ListState::default().with_selected(Some(app.cursor));
@@ -203,12 +204,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
     frame.render_widget(footer, footer_area);
 }
 
+/// Status colors matching the built-in's agent_icon: blocked red, working
+/// yellow, done teal(ish), idle green, unknown muted.
 fn status_color(status: AgentStatus) -> Option<Color> {
     match status {
-        AgentStatus::Idle => None,
-        AgentStatus::Working => Some(Color::Green),
+        AgentStatus::Idle => Some(Color::Green),
+        AgentStatus::Working => Some(Color::Yellow),
         AgentStatus::Blocked => Some(Color::Red),
-        AgentStatus::Done => Some(Color::Blue),
+        AgentStatus::Done => Some(Color::Cyan),
         AgentStatus::Unknown => Some(Color::DarkGray),
     }
 }
@@ -281,7 +284,7 @@ fn shorten_home(path: &str, home: Option<&str>) -> String {
 /// label on the left; pane count (branches) or agent name plus optional cwd
 /// (panes) right-aligned and dimmed. Drops the right column on narrow
 /// terminals rather than wrapping.
-fn row_line(row: &Row, width: usize, view: &ViewOptions) -> Line<'static> {
+fn row_line(row: &Row, width: usize, view: &ViewOptions, tick: u32) -> Line<'static> {
     let marker = if row.is_current { "→" } else { " " };
     let marker_style = if row.is_current && view.color {
         Style::new().fg(Color::Cyan)
@@ -306,7 +309,7 @@ fn row_line(row: &Row, width: usize, view: &ViewOptions) -> Line<'static> {
         Span::raw(format!(" {indent}{glyph}")),
     ];
     if let Some(set) = view.icon_set {
-        let icon = set.icon(row.agent_status);
+        let icon = set.icon(row.agent_status, tick);
         let style = match status_color(row.agent_status) {
             Some(color) if view.color => Style::new().fg(color),
             _ => Style::new(),
@@ -485,7 +488,7 @@ mod tests {
 
         assert!(!screen.contains("main"), "no tab row:\n{screen}");
         assert!(
-            screen.contains("  ○ claude"),
+            screen.contains("  ✓ claude"),
             "panes at depth 1, right under the workspace:\n{screen}"
         );
     }
@@ -548,11 +551,11 @@ mod tests {
 
         // ws=unknown "·", tab=working "●", panes=idle "○".
         assert!(
-            screen.contains("▼ · mothership (3)"),
+            screen.contains("▼ ○ mothership (3)"),
             "workspace pane count rides in the label:\n{screen}"
         );
-        assert!(screen.contains("  ▼ ● main"), "indented tab:\n{screen}");
-        assert!(screen.contains("    ○ claude"), "indented pane:\n{screen}");
+        assert!(screen.contains("  ▼ ⠋ main"), "indented tab:\n{screen}");
+        assert!(screen.contains("    ✓ claude"), "indented pane:\n{screen}");
         assert!(screen.contains("2 panes"), "tab pane count:\n{screen}");
         let ws_row = buffer_lines(&terminal)
             .into_iter()
@@ -563,7 +566,7 @@ mod tests {
             "no duplicate count in the workspace right column: {ws_row:?}"
         );
         let lines = buffer_lines(&terminal);
-        let agent_row = lines.iter().find(|l| l.contains("○ claude")).unwrap();
+        let agent_row = lines.iter().find(|l| l.contains("✓ claude")).unwrap();
         assert!(
             agent_row.contains("claude · idle"),
             "agent pane meta like the built-in: {agent_row:?}"
@@ -585,9 +588,9 @@ mod tests {
         };
         let terminal = render_with(80, 24, &mut app, &view);
         let screen = screen(&terminal);
-        assert!(screen.contains("▼ - mothership"), "screen:\n{screen}");
-        assert!(screen.contains("▼ + main"), "screen:\n{screen}");
-        assert!(screen.contains("o claude"), "screen:\n{screen}");
+        assert!(screen.contains("▼ o mothership"), "screen:\n{screen}");
+        assert!(screen.contains("▼ | main"), "screen:\n{screen}");
+        assert!(screen.contains("v claude"), "screen:\n{screen}");
     }
 
     #[test]
@@ -625,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn working_status_icon_is_green_unless_no_color() {
+    fn working_status_icon_is_yellow_unless_no_color() {
         let mut app = sample_app();
         let colored = ViewOptions {
             color: true,
@@ -633,17 +636,21 @@ mod tests {
         };
         let terminal = render_with(80, 24, &mut app, &colored);
         let lines = buffer_lines(&terminal);
-        let y = lines.iter().position(|l| l.contains("● main")).unwrap() as u16;
-        let x = lines[y as usize].chars().position(|c| c == '●').unwrap() as u16;
+        let y = lines.iter().position(|l| l.contains("⠋ main")).unwrap() as u16;
+        let x = lines[y as usize].chars().position(|c| c == '⠋').unwrap() as u16;
         let style = terminal.backend().buffer().cell((x, y)).unwrap().style();
-        assert_eq!(style.fg, Some(Color::Green), "colored icon");
+        assert_eq!(
+            style.fg,
+            Some(Color::Yellow),
+            "working spinner is yellow, like the built-in"
+        );
 
         let terminal = render_with(80, 24, &mut app, &plain_view());
         let lines = buffer_lines(&terminal);
-        let y = lines.iter().position(|l| l.contains("● main")).unwrap() as u16;
-        let x = lines[y as usize].chars().position(|c| c == '●').unwrap() as u16;
+        let y = lines.iter().position(|l| l.contains("⠋ main")).unwrap() as u16;
+        let x = lines[y as usize].chars().position(|c| c == '⠋').unwrap() as u16;
         let style = terminal.backend().buffer().cell((x, y)).unwrap().style();
-        assert_ne!(style.fg, Some(Color::Green), "NO_COLOR keeps default fg");
+        assert_ne!(style.fg, Some(Color::Yellow), "NO_COLOR keeps default fg");
     }
 
     #[test]
@@ -704,11 +711,11 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         let lines = buffer_lines(&terminal);
-        // "○ claude" (indented) is the list row; the detail panel header
+        // "✓ claude" (indented) is the list row; the detail panel header
         // also says "pane 1" but without the icon.
         let cursor_y = lines
             .iter()
-            .position(|line| line.contains("○ claude"))
+            .position(|line| line.contains("✓ claude"))
             .expect("cursor row must be on screen") as u16;
         let x = lines[cursor_y as usize]
             .chars()
@@ -727,9 +734,9 @@ mod tests {
         let terminal = render(80, 24, &mut app);
         let lines = buffer_lines(&terminal);
 
-        let current = lines.iter().find(|l| l.contains("○ claude")).unwrap();
+        let current = lines.iter().find(|l| l.contains("✓ claude")).unwrap();
         assert!(current.contains("→"), "current row: {current:?}");
-        let other = lines.iter().find(|l| l.contains("○ pane 2")).unwrap();
+        let other = lines.iter().find(|l| l.contains("✓ pane 2")).unwrap();
         assert!(!other.contains("→"), "other row: {other:?}");
     }
 
@@ -930,7 +937,7 @@ mod tests {
 
         let y = lines
             .iter()
-            .position(|l| l.contains("· mothership"))
+            .position(|l| l.contains("○ mothership"))
             .unwrap() as u16;
         let x = lines[y as usize].chars().position(|c| c == 'm').unwrap() as u16;
         assert!(

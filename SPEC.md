@@ -108,7 +108,8 @@ show_pane_count   = true
 show_agent_status = true
 show_cwd          = false     # off by default; opt in for wide terminals
 
-# "nerd" -> ○●✓✗·   "ascii" -> o+xv-   "emoji" -> ⚪🟢✅❌⚫
+# Matches the built-in's agent icons (blocked/working/done/idle/unknown):
+# "nerd" -> ◉ ⠋(spinner) ● ✓ ○   "ascii" -> ! |(spinner) * v o   "emoji" -> 🔴🟡🔵✅⚪
 icon_set = "nerd"
 
 [behavior]

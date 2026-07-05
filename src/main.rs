@@ -102,11 +102,24 @@ fn main() -> ExitCode {
     let mut app = App::new(tree, enter_on_branch);
     let hints = ui::FooterHints::from_keymap(&keymaps.normal);
 
+    // Poll with a timeout instead of blocking on input: idle timeouts
+    // advance the tick that animates the working-status spinner, exactly
+    // like the built-in's. Keys still resolve immediately (chords stay
+    // timeout-free — the tick only redraws).
+    const SPINNER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(125);
     let mut terminal = ratatui::init();
     let selection = loop {
         if let Err(e) = terminal.draw(|frame| ui::draw(frame, &mut app, &hints, &view)) {
             ratatui::restore();
             return fail_visibly(&format!("failed to draw: {e}"));
+        }
+        match event::poll(SPINNER_INTERVAL) {
+            Ok(false) => {
+                app.tick = app.tick.wrapping_add(1);
+                continue;
+            }
+            Ok(true) => {}
+            Err(_) => break None,
         }
         match event::read() {
             Ok(Event::Key(key)) => {
