@@ -237,7 +237,8 @@ impl App {
             return Outcome::Continue;
         }
         let last = self.rows.len() - 1;
-        let page = (self.viewport_height as usize).max(1);
+        // Half a viewport per page, like the built-in's ctrl+d/ctrl+u.
+        let page = (self.viewport_height as usize / 2).max(1);
         let row = self.rows[self.cursor].clone();
         match action {
             Action::Down => self.cursor = (self.cursor + 1).min(last),
@@ -481,8 +482,12 @@ mod tests {
         assert_eq!(app.cursor, 6, "bottom hits the last visible row");
         press(&mut app, &keymaps, "down");
         assert_eq!(app.cursor, 6, "down clamps at the bottom");
+        // Half a viewport per page, like the built-in's ctrl+d/ctrl+u.
+        app.viewport_height = 4;
         press(&mut app, &keymaps, "ctrl+u");
-        assert_eq!(app.cursor, 3, "page up moves by viewport height");
+        assert_eq!(app.cursor, 4, "page up moves by half the viewport");
+        press(&mut app, &keymaps, "ctrl+d");
+        assert_eq!(app.cursor, 6, "page down moves by half the viewport");
     }
 
     #[test]
