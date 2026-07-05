@@ -120,6 +120,12 @@ show_cwd          = false     # off by default; opt in for wide terminals
 # "nerd" -> ◉ ⠋(spinner) ● ✓ ○   "ascii" -> ! |(spinner) * v o   "emoji" -> 🔴🟡🔵✅⚪
 icon_set = "nerd"
 
+# Accent for the cursor row, current markers, and separators. "auto" reads
+# the herdr theme out of the host config.toml ([theme] name + custom.accent
+# override, mirroring the host's own resolution — 0.7.1 exposes no theme
+# API to plugins) with a cyan fallback; or set a named ANSI color / #rrggbb.
+accent = "auto"
+
 [behavior]
 initial_expansion = "all"   # "all" | "current_workspace" | "none"
 

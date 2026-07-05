@@ -105,6 +105,7 @@ impl ViewOptions {
         display: &DisplayConfig,
         no_color: bool,
         home: Option<String>,
+        host_accent: Option<Color>,
     ) -> (ViewOptions, Vec<String>) {
         let mut warnings = Vec::new();
         let icon_set = if display.show_agent_status {
@@ -118,13 +119,19 @@ impl ViewOptions {
         } else {
             None
         };
-        let accent = parse_color(&display.accent).unwrap_or_else(|| {
-            warnings.push(format!(
-                "unknown accent {:?}; using \"cyan\"",
-                display.accent
-            ));
-            Color::Cyan
-        });
+        // "auto" follows the herdr theme's accent (resolved from the host
+        // config by the caller); an explicit color always wins.
+        let accent = if display.accent == "auto" {
+            host_accent.unwrap_or(Color::Cyan)
+        } else {
+            parse_color(&display.accent).unwrap_or_else(|| {
+                warnings.push(format!(
+                    "unknown accent {:?}; using \"cyan\"",
+                    display.accent
+                ));
+                Color::Cyan
+            })
+        };
         (
             ViewOptions {
                 icon_set,
@@ -140,7 +147,7 @@ impl ViewOptions {
 }
 
 /// Named ANSI colors and `#rrggbb` hex.
-fn parse_color(text: &str) -> Option<Color> {
+pub(crate) fn parse_color(text: &str) -> Option<Color> {
     let lower = text.trim().to_lowercase();
     if let Some(hex) = lower.strip_prefix('#') {
         if hex.len() == 6 {
@@ -870,13 +877,13 @@ mod tests {
             icon_set: "comic-sans".to_string(),
             ..Default::default()
         };
-        let (view, warnings) = ViewOptions::from_config(&display, false, None);
+        let (view, warnings) = ViewOptions::from_config(&display, false, None, None);
         assert_eq!(view.icon_set, Some(IconSet::Nerd));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("comic-sans"));
 
         display.show_agent_status = false;
-        let (view, warnings) = ViewOptions::from_config(&display, true, None);
+        let (view, warnings) = ViewOptions::from_config(&display, true, None, None);
         assert_eq!(view.icon_set, None, "hidden icons skip validation");
         assert!(warnings.is_empty());
         assert!(!view.color, "NO_COLOR disables color");
@@ -1322,7 +1329,7 @@ mod tests {
             accent: "mauve-ish".to_string(),
             ..Default::default()
         };
-        let (view, warnings) = ViewOptions::from_config(&display, false, None);
+        let (view, warnings) = ViewOptions::from_config(&display, false, None, None);
         assert_eq!(view.accent, Color::Cyan);
         assert!(warnings.iter().any(|w| w.contains("mauve-ish")));
     }

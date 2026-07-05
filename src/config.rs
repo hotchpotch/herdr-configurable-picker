@@ -66,9 +66,10 @@ show_cwd          = false
 # "nerd" | "ascii" | "emoji"
 icon_set = "nerd"
 
-# Accent for the cursor row, current markers, and separators. A named ANSI
-# color ("cyan", "magenta", ...) or hex ("#bd93f9") — match your herdr theme.
-accent = "cyan"
+# Accent for the cursor row, current markers, and separators.
+# "auto" follows the herdr theme; or set a named ANSI color ("cyan",
+# "magenta", ...) or hex ("#bd93f9").
+accent = "auto"
 
 [behavior]
 # "all" | "current_workspace" | "none"
@@ -164,7 +165,7 @@ impl Default for DisplayConfig {
             show_agent_status: true,
             show_cwd: false,
             icon_set: "nerd".to_string(),
-            accent: "cyan".to_string(),
+            accent: "auto".to_string(),
         }
     }
 }
