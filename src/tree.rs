@@ -262,6 +262,14 @@ impl Tree {
     }
 
     fn build_rows(&self, filter: RowFilter) -> Vec<Row> {
+        // Lowercase the query once; every node comparison below runs
+        // against already-lowercased search text (review feedback: the
+        // per-node to_lowercase() allocations add up on every keystroke).
+        let lowered_query = match filter {
+            RowFilter::Text(query) => query.to_lowercase(),
+            _ => String::new(),
+        };
+        let query = lowered_query.as_str();
         let mut rows = Vec::new();
         for (ws_idx, ws) in self.workspaces.iter().enumerate() {
             // Like the built-in goto (navigator_child_rows: `multi_tab =
@@ -310,16 +318,19 @@ impl Tree {
                             .map(|_| ws.expanded && (single_tab || tab.expanded))
                             .collect(),
                     ),
-                    RowFilter::Text(query) => {
+                    RowFilter::Text(_) => {
                         let pane_shown: Vec<bool> = tab
                             .panes
                             .iter()
                             .map(|pane| {
-                                crate::search::query_matches(&pane_search_text(&pane.info), query)
+                                crate::search::lowered_query_matches(
+                                    &pane_search_text(&pane.info),
+                                    query,
+                                )
                             })
                             .collect();
                         let tab_shown = !single_tab
-                            && (crate::search::query_matches(tab_search, query)
+                            && (crate::search::lowered_query_matches(tab_search, query)
                                 || pane_shown.iter().any(|&shown| shown));
                         (tab_shown, pane_shown)
                     }
@@ -346,8 +357,8 @@ impl Tree {
                 .unwrap_or(AgentStatus::Unknown);
             let ws_shown = match filter {
                 RowFilter::None => true,
-                RowFilter::Text(query) => {
-                    crate::search::query_matches(&ws_search, query) || any_child_shown
+                RowFilter::Text(_) => {
+                    crate::search::lowered_query_matches(&ws_search, query) || any_child_shown
                 }
                 RowFilter::State(status) => ws_status_agg == status || any_child_shown,
             };
@@ -697,8 +708,8 @@ fn pane_meta(info: &PaneInfo) -> String {
         Some(agent) => {
             let status = info
                 .custom_status
-                .clone()
-                .unwrap_or_else(|| info.agent_status.name().to_string());
+                .as_deref()
+                .unwrap_or_else(|| info.agent_status.name());
             format!("{agent} · {status}")
         }
         None => "shell".to_string(),

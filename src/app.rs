@@ -309,9 +309,11 @@ impl App {
         self.cursor = if self.query.is_empty() {
             self.tree.initial_cursor()
         } else {
+            // Lowercase once; search_text is stored lowercased.
+            let lowered = self.query.to_lowercase();
             self.rows
                 .iter()
-                .position(|row| crate::search::query_matches(&row.search_text, &self.query))
+                .position(|row| crate::search::lowered_query_matches(&row.search_text, &lowered))
                 .unwrap_or(0)
         };
     }

@@ -77,7 +77,8 @@ impl FooterHints {
                 key.as_str(),
                 Style::new().add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled(format!(" {action}"), dim_style(view)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(action.as_str(), dim_style(view)));
         }
         Line::from(spans)
     }
