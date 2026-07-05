@@ -114,21 +114,16 @@ impl ViewOptions {
 const DETAIL_MIN_TOTAL_WIDTH: u16 = 60;
 
 pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOptions) {
-    // Accent-colored frame, like herdr's own modals, so the picker reads as
-    // part of the host rather than a foreign box.
+    // No frame of our own: herdr already draws pane chrome (border + the
+    // manifest pane title) around this canvas, and a second box inside it
+    // just wastes two rows and two columns. Accent color is reserved for
+    // the internal separators.
     let border_style = if view.color {
         Style::new().fg(Color::Cyan)
     } else {
         Style::new()
     };
-    let outer = Block::bordered()
-        .border_style(border_style)
-        .title(Line::styled(
-            " goto ",
-            Style::new().add_modifier(Modifier::BOLD),
-        ));
-    let inner = outer.inner(frame.area());
-    frame.render_widget(outer, frame.area());
+    let inner = frame.area();
 
     // The search prompt line exists while the prompt is focused or a filter
     // is still applied, so the user can always see why rows are missing.
@@ -732,12 +727,12 @@ mod tests {
         let mut app = sample_app();
         let terminal = render(80, 24, &mut app);
         let lines = buffer_lines(&terminal);
-        // The first inner line is the list, not a prompt (the footer's
+        // The first line is the list, not a prompt (the footer's
         // "/ search" hint is elsewhere).
         assert!(
-            lines[1].contains("mothership"),
-            "first inner line: {:?}",
-            lines[1]
+            lines[0].contains("mothership"),
+            "first line: {:?}",
+            lines[0]
         );
     }
 
@@ -829,12 +824,12 @@ mod tests {
             screen.contains("pane 20"),
             "row under cursor must be scrolled into view:\n{screen}"
         );
-        // 12 rows minus top/bottom border (2) and footer (2) -> 8.
-        assert_eq!(app.viewport_height, 8);
+        // 12 rows minus the footer (2) -> 10; herdr owns the pane border.
+        assert_eq!(app.viewport_height, 10);
     }
 
     #[test]
-    fn frame_is_accent_colored_and_workspaces_bold() {
+    fn no_own_frame_but_separators_carry_accent_and_workspaces_bold() {
         let mut app = sample_app();
         let colored = ViewOptions {
             color: true,
@@ -842,13 +837,23 @@ mod tests {
         };
         let terminal = render_with(80, 24, &mut app, &colored);
         let buffer = terminal.backend().buffer();
-        assert_eq!(
-            buffer.cell((0, 0)).unwrap().style().fg,
-            Some(Color::Cyan),
-            "border carries the accent color"
+        let lines = buffer_lines(&terminal);
+
+        // herdr draws the pane chrome; our canvas starts with content.
+        assert!(
+            lines[0].contains("mothership"),
+            "no own border, first line is the list: {:?}",
+            lines[0]
         );
 
-        let lines = buffer_lines(&terminal);
+        // The footer's top separator keeps the accent color.
+        let sep_y = lines.iter().position(|l| l.starts_with('─')).unwrap() as u16;
+        assert_eq!(
+            buffer.cell((0, sep_y)).unwrap().style().fg,
+            Some(Color::Cyan),
+            "footer separator carries the accent color"
+        );
+
         let y = lines
             .iter()
             .position(|l| l.contains("· mothership"))
@@ -864,10 +869,16 @@ mod tests {
             "workspace labels are bold"
         );
 
-        // NO_COLOR: no cyan border, structure modifiers stay.
+        // NO_COLOR: no cyan separator, structure modifiers stay.
         let terminal = render_with(80, 24, &mut app, &plain_view());
         assert_ne!(
-            terminal.backend().buffer().cell((0, 0)).unwrap().style().fg,
+            terminal
+                .backend()
+                .buffer()
+                .cell((0, sep_y))
+                .unwrap()
+                .style()
+                .fg,
             Some(Color::Cyan)
         );
     }
