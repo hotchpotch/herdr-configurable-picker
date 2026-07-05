@@ -213,7 +213,9 @@ Selecting a node sends the matching socket method:
 | --------- | ------ | ----- |
 | Workspace | `workspace.focus {workspace_id}` | Lands on the workspace's focused tab & pane. |
 | Tab       | `tab.focus {tab_id}`             | Lands on the tab's focused pane. |
-| Pane      | `pane.focus {pane_id}`           | Works for **all** panes, agent or not — the socket API has `pane.focus` even though the CLI does not expose it. |
+| Pane      | `pane.focus {pane_id}`, falling back to `tab.focus {tab_id}` | The socket-side `pane.focus` (never exposed by the CLI) only exists in herdr builds **after 0.7.1**; older servers reject the method, so the picker retries with the pane's tab, which lands on that tab's focused pane. |
+
+herdr answers a request it cannot parse (e.g. an unknown method) with an `invalid_request` error whose `id` is **empty** — clients must check the error body before comparing ids, or the real message gets masked.
 
 ## Search
 
