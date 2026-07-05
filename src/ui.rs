@@ -335,6 +335,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
         let list = List::new(items).highlight_style(highlight);
         let mut state = ListState::default().with_selected(Some(app.cursor));
         frame.render_stateful_widget(list, list_area, &mut state);
+        render_scrollbar(frame, list_area, app.rows().len(), state.offset(), view);
     }
 
     if let Some(detail_area) = detail_area {
@@ -358,6 +359,63 @@ fn status_color(status: AgentStatus) -> Option<Color> {
         AgentStatus::Blocked => Some(Color::Red),
         AgentStatus::Done => Some(Color::Cyan),
         AgentStatus::Unknown => Some(Color::DarkGray),
+    }
+}
+
+/// Thumb geometry for a proportional scrollbar: `(top, len)` cells within
+/// a `track`-tall track, or None when everything already fits.
+fn scrollbar_thumb(
+    total: usize,
+    viewport: usize,
+    offset: usize,
+    track: usize,
+) -> Option<(usize, usize)> {
+    if total <= viewport || track == 0 {
+        return None;
+    }
+    let len = (((viewport * track) as f32 / total as f32).round() as usize).clamp(1, track);
+    let max_top = track - len;
+    let max_offset = total - viewport;
+    let top = (((offset.min(max_offset) * max_top) as f32 / max_offset as f32).round() as usize)
+        .min(max_top);
+    Some((top, len))
+}
+
+/// The built-in navigator's scrollbar: a `▕` column overdrawn on the
+/// list's right edge, dim track with the thumb standing out. Only appears
+/// when the rows overflow the viewport.
+fn render_scrollbar(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    total: usize,
+    offset: usize,
+    view: &ViewOptions,
+) {
+    if area.width == 0 {
+        return;
+    }
+    let Some((top, len)) =
+        scrollbar_thumb(total, area.height as usize, offset, area.height as usize)
+    else {
+        return;
+    };
+    let thumb = if view.color {
+        Style::new().fg(view.accent)
+    } else {
+        Style::new().add_modifier(Modifier::BOLD)
+    };
+    let x = area.x + area.width - 1;
+    let buf = frame.buffer_mut();
+    for (i, y) in (area.y..area.y + area.height).enumerate() {
+        let cell = &mut buf[(x, y)];
+        cell.set_symbol("▕");
+        // Patch fg only: the selected row's background continues under
+        // the bar, exactly like the built-in's.
+        cell.set_style(if i >= top && i < top + len {
+            thumb
+        } else {
+            dim_style(view)
+        });
     }
 }
 
@@ -1299,6 +1357,31 @@ mod tests {
             lines[0].trim_end().ends_with("3 panes"),
             "count next to the prompt: {:?}",
             lines[0]
+        );
+    }
+
+    #[test]
+    fn overflowing_list_grows_a_scrollbar_on_the_right_edge() {
+        let mut app = sample_app(); // 6 rows
+                                    // 8 rows tall: 2 header + 2 footer leave a 4-row list viewport,
+                                    // and 50 wide keeps the detail panel away from the right edge.
+        let terminal = render(50, 8, &mut app);
+        let lines = buffer_lines(&terminal);
+        for y in 2..6 {
+            assert!(
+                lines[y].ends_with('▕'),
+                "scrollbar in the last column of line {y}: {:?}",
+                lines[y]
+            );
+        }
+
+        // Roomy viewport: no scrollbar.
+        let terminal = render(50, 24, &mut app);
+        let lines = buffer_lines(&terminal);
+        assert!(
+            !lines[2].ends_with('▕'),
+            "no scrollbar when everything fits: {:?}",
+            lines[2]
         );
     }
 
