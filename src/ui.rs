@@ -150,7 +150,9 @@ impl ViewOptions {
 pub(crate) fn parse_color(text: &str) -> Option<Color> {
     let lower = text.trim().to_lowercase();
     if let Some(hex) = lower.strip_prefix('#') {
-        if hex.len() == 6 {
+        // is_ascii guards the byte slicing below: "#あい" is also 6 bytes,
+        // and slicing it mid-character would panic.
+        if hex.len() == 6 && hex.is_ascii() {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
             let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
@@ -1298,6 +1300,11 @@ mod tests {
         assert_eq!(parse_color("purple"), Some(Color::Magenta));
         assert_eq!(parse_color("#bd93f9"), Some(Color::Rgb(0xbd, 0x93, 0xf9)));
         assert_eq!(parse_color("#bad"), None, "short hex unsupported");
+        assert_eq!(
+            parse_color("#あい"),
+            None,
+            "6 BYTES of non-ASCII must not panic the byte slicing"
+        );
         assert_eq!(parse_color("mauve-ish"), None);
     }
 
