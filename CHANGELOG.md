@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Agent-only filter (`filter_agents`, default `r`/`ctrl+r`) that shows
   panes with `agent`/`display_agent` and keeps their workspace/tab context.
+- Fuzzy `/` search over labels, meta, pane titles, cwd/foreground cwd, and
+  resolved git branch/worktree metadata. Three-character and shorter queries
+  stay substring-only to avoid broad matches such as `/tmp`.
+- State and agent filters can now be combined with `/` search, and the
+  footer groups the agent-only `r` binding with the other state filters.
 
 ## [1.0.0] - 2026-07-05
 

@@ -51,8 +51,9 @@ search_start = ["/", "ctrl+s"]
 search_clear = ["ctrl+u"]
 search_exit  = ["esc"]
 
-# State filters: show only nodes whose agents are in the given state.
-# Mutually exclusive with text search (starting one drops the other).
+# State filters: show only nodes whose agents are in the given state; the
+# agent filter shows panes with an agent/display-agent. These filters can be
+# combined with text search.
 # The ctrl aliases are IME-safe like ctrl+s above. filter_idle binds
 # "tab" because ctrl+i IS tab to a terminal (both send 0x09) — pressing
 # ctrl+i works. filter_done owns ctrl+d (page_down has ctrl+v instead).

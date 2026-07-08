@@ -42,12 +42,14 @@ impl FooterHints {
                 entries.push((key, label.to_string()));
             }
         }
-        // The state filters collapse into one "b/w/i/d/a states" hint.
+        // The state/agent filters collapse into one "b/w/i/d/r/a states"
+        // hint.
         let filter_keys: Vec<String> = [
             Action::FilterBlocked,
             Action::FilterWorking,
             Action::FilterIdle,
             Action::FilterDone,
+            Action::FilterAgents,
             Action::FilterClear,
         ]
         .into_iter()
@@ -55,9 +57,6 @@ impl FooterHints {
         .collect();
         if !filter_keys.is_empty() {
             entries.push((filter_keys.join("/"), "states".to_string()));
-        }
-        if let Some(key) = keymap.first_binding_label(Action::FilterAgents) {
-            entries.push((key, "agents".to_string()));
         }
         for (action, label) in [(Action::Accept, "accept"), (Action::Cancel, "cancel")] {
             if let Some(key) = keymap.first_binding_label(action) {
@@ -260,6 +259,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
         let [prompt_area, count_area] =
             Layout::horizontal([Constraint::Min(1), Constraint::Length(COUNT_WIDTH)])
                 .areas(header_inner);
+        let focused = app.mode == Mode::Search;
+        let query_style = if focused {
+            Style::new().add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().add_modifier(Modifier::DIM)
+        };
         if let Some(status) = app.state_filter {
             // Active state filter (b/w/i/d): "/ {icon} {name}" — the
             // built-in's chip, with the state's own icon (the spinner for
@@ -280,6 +285,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
                 status.name(),
                 style.add_modifier(Modifier::BOLD),
             ));
+            append_query(&mut spans, app.query.as_str(), focused, query_style, view);
             frame.render_widget(Paragraph::new(Line::from(spans)), prompt_area);
         } else if app.agent_filter {
             let mut spans = vec![Span::styled(" / ", dim_style(view))];
@@ -294,16 +300,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
                 "agents",
                 Style::new().add_modifier(Modifier::BOLD),
             ));
+            append_query(&mut spans, app.query.as_str(), focused, query_style, view);
             frame.render_widget(Paragraph::new(Line::from(spans)), prompt_area);
         } else {
             // The trailing bar marks the prompt as focused (typing goes
             // here); the query is the content, the "/" just furniture.
-            let focused = app.mode == Mode::Search;
-            let query_style = if focused {
-                Style::new().add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().add_modifier(Modifier::DIM)
-            };
             let mut spans = vec![
                 Span::styled(" / ", dim_style(view)),
                 Span::styled(app.query.as_str(), query_style),
@@ -378,6 +379,22 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
             .border_style(border_style),
     );
     frame.render_widget(footer, footer_area);
+}
+
+fn append_query<'a>(
+    spans: &mut Vec<Span<'a>>,
+    query: &'a str,
+    focused: bool,
+    query_style: Style,
+    view: &ViewOptions,
+) {
+    if focused || !query.is_empty() {
+        spans.push(Span::styled(" ", dim_style(view)));
+        spans.push(Span::styled(query, query_style));
+    }
+    if focused {
+        spans.push(Span::raw("▏"));
+    }
 }
 
 /// Status colors matching the built-in's agent_icon: blocked red, working
@@ -1621,6 +1638,24 @@ mod tests {
     }
 
     #[test]
+    fn agent_filter_line_shows_search_query_when_combined() {
+        use crate::keymap::{parse_key_spec, Keymaps};
+        let keys = KeysConfig::default();
+        let (normal, _) = Keymap::from_bindings(&keys.to_bindings());
+        let (search, _) = Keymap::from_bindings(&keys.to_search_bindings());
+        let keymaps = Keymaps { normal, search };
+
+        let mut app = sample_app();
+        app.handle_key(&keymaps, parse_key_spec("r").unwrap().0[0]);
+        app.handle_key(&keymaps, parse_key_spec("/").unwrap().0[0]);
+        app.handle_key(&keymaps, parse_key_spec("x").unwrap().0[0]);
+        let terminal = render(80, 24, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(screen.contains("agents x▏"), "filter line:\n{screen}");
+    }
+
+    #[test]
     fn search_line_keeps_the_pane_total() {
         let mut app = sample_app();
         app.mode = Mode::Search;
@@ -1673,7 +1708,7 @@ mod tests {
         let mut app = sample_app();
         let terminal = render(80, 24, &mut app);
         assert!(
-            screen(&terminal).contains("b/w/i/d/a states"),
+            screen(&terminal).contains("b/w/i/d/r/a states"),
             "screen:\n{}",
             screen(&terminal)
         );

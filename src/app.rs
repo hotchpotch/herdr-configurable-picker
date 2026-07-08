@@ -74,11 +74,13 @@ pub struct App {
     enter_on_branch: EnterOnBranch,
     pub mode: Mode,
     pub query: String,
-    /// Active state filter (the built-in's b/w/i/d keys). Mutually
-    /// exclusive with the text query: setting one drops the other.
+    /// Active state filter (the built-in's b/w/i/d keys). State/agent
+    /// filters are mutually exclusive with each other, but may be combined
+    /// with the text query.
     pub state_filter: Option<AgentStatus>,
     /// Active agent-only filter: show panes with `agent`/`display_agent`.
-    /// Mutually exclusive with text search and state filters.
+    /// Mutually exclusive with state filters, but may be combined with
+    /// text search.
     pub agent_filter: bool,
     /// True when the snapshot itself had nothing to show (as opposed to a
     /// filter that currently matches nothing).
@@ -285,9 +287,6 @@ impl App {
                 return Outcome::Continue;
             }
             Action::SearchStart => {
-                // Text search and state filter are mutually exclusive.
-                self.state_filter = None;
-                self.agent_filter = false;
                 self.mode = Mode::Search;
                 self.refresh_filter();
                 return Outcome::Continue;
@@ -378,9 +377,8 @@ impl App {
         Outcome::Continue
     }
 
-    /// Drops both the text query and the state filter (they are mutually
-    /// exclusive, but a leftover query survives leaving search mode) and
-    /// parks the cursor back on the current node.
+    /// Drops the text query and all row filters, then parks the cursor back
+    /// on the current node.
     fn clear_filters(&mut self) {
         self.query.clear();
         self.state_filter = None;
@@ -396,41 +394,28 @@ impl App {
     fn set_state_filter(&mut self, status: AgentStatus) {
         self.state_filter = Some(status);
         self.agent_filter = false;
-        self.query.clear();
         self.refresh_rows();
         // Land on the first node actually in that state, not an ancestor
         // shown for context.
-        self.cursor = self
-            .rows
-            .iter()
-            .position(|row| row.agent_status == status)
-            .unwrap_or(0);
+        self.cursor = self.first_active_match().unwrap_or(0);
     }
 
     fn set_agent_filter(&mut self) {
         self.state_filter = None;
         self.agent_filter = true;
-        self.query.clear();
         self.refresh_rows();
         // Land on the first actual agent pane, not an ancestor shown for
         // context.
-        self.cursor = self
-            .rows
-            .iter()
-            .position(|row| row.kind == RowKind::Pane && row.agent.is_some())
-            .unwrap_or(0);
+        self.cursor = self.first_active_match().unwrap_or(0);
     }
 
-    /// Rows under the active filter (agent/state filters win; else text query).
+    /// Rows under the active search query and optional state/agent scope.
     fn refresh_rows(&mut self) {
-        self.rows = if self.agent_filter {
-            self.tree.visible_rows_agent_filtered()
-        } else {
-            match self.state_filter {
-                Some(status) => self.tree.visible_rows_state_filtered(status),
-                None => self.tree.visible_rows_filtered(&self.query),
-            }
-        };
+        self.rows = self.tree.visible_rows_filtered_scoped(
+            &self.query,
+            self.state_filter,
+            self.agent_filter,
+        );
     }
 
     /// Recomputes the rows for the current query and drops the cursor on
@@ -438,15 +423,30 @@ impl App {
     fn refresh_filter(&mut self) {
         self.refresh_rows();
         self.cursor = if self.query.is_empty() {
-            self.tree.initial_cursor()
+            self.first_active_match().unwrap_or_else(|| {
+                self.tree
+                    .initial_cursor()
+                    .min(self.rows.len().saturating_sub(1))
+            })
         } else {
-            // Lowercase once; search_text is stored lowercased.
-            let lowered = self.query.to_lowercase();
-            self.rows
-                .iter()
-                .position(|row| crate::search::lowered_query_matches(&row.search_text, &lowered))
-                .unwrap_or(0)
+            self.first_active_match().unwrap_or(0)
         };
+    }
+
+    fn first_active_match(&self) -> Option<usize> {
+        let lowered = self.query.to_lowercase();
+        self.rows.iter().position(|row| {
+            let scope_matches = if self.agent_filter {
+                row.kind == RowKind::Pane && row.agent.is_some()
+            } else if let Some(status) = self.state_filter {
+                row.agent_status == status
+            } else {
+                true
+            };
+            let query_matches = lowered.is_empty()
+                || crate::search::lowered_query_matches(&row.search_text, &lowered);
+            scope_matches && query_matches
+        })
     }
 
     /// Rebuilds the visible rows and parks the cursor on `path` (which is
@@ -935,11 +935,12 @@ mod tests {
     }
 
     #[test]
-    fn state_filter_keys_filter_clear_and_exclude_search() {
+    fn state_filter_keys_filter_clear_and_combine_with_search() {
         let keymaps = default_keymaps();
         let mut blocked = pane("w2:p1", "w2:t1", "w2", false);
         blocked.agent = Some("claude".to_string());
         blocked.agent_status = AgentStatus::Blocked;
+        blocked.title = Some("fix config loader".to_string());
         let tree = Tree::build(
             vec![
                 workspace("w1", 1, "alpha", true),
@@ -957,24 +958,33 @@ mod tests {
         press(&mut app, &keymaps, "b");
         assert_eq!(app.state_filter, Some(AgentStatus::Blocked));
         let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
-        assert_eq!(labels, vec!["beta", "claude"], "blocked chain only");
-        assert_eq!(cursor_label(&app), "claude", "cursor on the blocked node");
+        assert_eq!(
+            labels,
+            vec!["beta", "fix config loader"],
+            "blocked chain only"
+        );
+        assert_eq!(
+            cursor_label(&app),
+            "fix config loader",
+            "cursor on the blocked node"
+        );
 
         press(&mut app, &keymaps, "a");
         assert_eq!(app.state_filter, None);
         assert_eq!(app.rows().len(), 4, "full tree restored");
 
-        // Entering search drops an active state filter.
-        press(&mut app, &keymaps, "w");
-        assert!(app.rows().is_empty(), "nothing is working");
+        // Entering search keeps an active state filter and narrows within it.
+        press(&mut app, &keymaps, "b");
         press(&mut app, &keymaps, "/");
-        assert_eq!(app.state_filter, None);
+        assert_eq!(app.state_filter, Some(AgentStatus::Blocked));
         assert_eq!(app.mode, Mode::Search);
-        assert_eq!(app.rows().len(), 4);
+        type_text(&mut app, &keymaps, "config");
+        let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["beta", "fix config loader"]);
         // ...and typing b/w/i/d in search mode edits the query instead.
         press(&mut app, &keymaps, "b");
-        assert_eq!(app.query, "b");
-        assert_eq!(app.state_filter, None);
+        assert_eq!(app.query, "configb");
+        assert_eq!(app.state_filter, Some(AgentStatus::Blocked));
     }
 
     #[test]
@@ -982,6 +992,7 @@ mod tests {
         let keymaps = default_keymaps();
         let mut agent = pane("w2:p1", "w2:t1", "w2", false);
         agent.agent = Some("claude".to_string());
+        agent.title = Some("review tmp output".to_string());
         let tree = Tree::build(
             vec![
                 workspace("w1", 1, "alpha", true),
@@ -1000,8 +1011,16 @@ mod tests {
         assert!(app.agent_filter);
         assert_eq!(app.state_filter, None);
         let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
-        assert_eq!(labels, vec!["beta", "claude"], "agent chain only");
-        assert_eq!(cursor_label(&app), "claude", "cursor on the agent pane");
+        assert_eq!(
+            labels,
+            vec!["beta", "review tmp output"],
+            "agent chain only"
+        );
+        assert_eq!(
+            cursor_label(&app),
+            "review tmp output",
+            "cursor on the agent pane"
+        );
 
         press(&mut app, &keymaps, "a");
         assert!(!app.agent_filter);
@@ -1009,9 +1028,11 @@ mod tests {
 
         press(&mut app, &keymaps, "r");
         press(&mut app, &keymaps, "/");
-        assert!(!app.agent_filter, "search drops the agent filter");
+        assert!(app.agent_filter, "search keeps the agent filter");
         assert_eq!(app.mode, Mode::Search);
-        assert_eq!(app.rows().len(), 4);
+        type_text(&mut app, &keymaps, "tmp");
+        let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["beta", "review tmp output"]);
     }
 
     #[test]

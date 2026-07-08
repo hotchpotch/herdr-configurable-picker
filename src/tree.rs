@@ -96,15 +96,32 @@ pub struct Row {
 
 /// Which rows [`Tree::build_rows`] keeps.
 #[derive(Debug, Clone, Copy)]
-enum RowFilter<'a> {
+enum RowScope {
     /// Expansion-based view.
-    None,
-    /// Multi-word AND text query over each node's search text.
-    Text(&'a str),
+    All,
     /// Only nodes whose (aggregate) agent status equals this.
     State(AgentStatus),
     /// Only panes with an agent label; ancestors stay visible as context.
     Agents,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RowFilter<'a> {
+    query: &'a str,
+    scope: RowScope,
+}
+
+impl<'a> RowFilter<'a> {
+    fn expansion() -> Self {
+        Self {
+            query: "",
+            scope: RowScope::All,
+        }
+    }
+
+    fn is_expansion(self) -> bool {
+        self.query.is_empty() && matches!(self.scope, RowScope::All)
+    }
 }
 
 #[derive(Debug)]
@@ -255,7 +272,7 @@ impl Tree {
     }
 
     pub fn visible_rows(&self) -> Vec<Row> {
-        self.build_rows(RowFilter::None)
+        self.build_rows(RowFilter::expansion())
     }
 
     /// Search view: a node is visible iff its own search text (label plus
@@ -265,9 +282,45 @@ impl Tree {
     /// ignored while a filter is active. Empty query = the expansion view.
     pub fn visible_rows_filtered(&self, query: &str) -> Vec<Row> {
         if query.is_empty() {
-            self.build_rows(RowFilter::None)
+            self.build_rows(RowFilter::expansion())
         } else {
-            self.build_rows(RowFilter::Text(query))
+            self.build_rows(RowFilter {
+                query,
+                scope: RowScope::All,
+            })
+        }
+    }
+
+    /// Search plus an optional state/agent scope. The scope narrows which
+    /// rows may match; the query then narrows that scoped set.
+    pub fn visible_rows_filtered_scoped(
+        &self,
+        query: &str,
+        state: Option<AgentStatus>,
+        agents: bool,
+    ) -> Vec<Row> {
+        if agents {
+            if query.is_empty() {
+                return self.visible_rows_agent_filtered();
+            }
+        } else if let Some(status) = state {
+            if query.is_empty() {
+                return self.visible_rows_state_filtered(status);
+            }
+        } else {
+            return self.visible_rows_filtered(query);
+        }
+        let scope = if agents {
+            RowScope::Agents
+        } else if let Some(status) = state {
+            RowScope::State(status)
+        } else {
+            RowScope::All
+        };
+        if query.is_empty() && matches!(scope, RowScope::All) {
+            self.visible_rows()
+        } else {
+            self.build_rows(RowFilter { query, scope })
         }
     }
 
@@ -275,23 +328,26 @@ impl Tree {
     /// (aggregate) agent status equals `status`, with the same
     /// ancestor-reveal rules as text search.
     pub fn visible_rows_state_filtered(&self, status: AgentStatus) -> Vec<Row> {
-        self.build_rows(RowFilter::State(status))
+        self.build_rows(RowFilter {
+            query: "",
+            scope: RowScope::State(status),
+        })
     }
 
     /// Agent-filter view: only panes with an agent or display-agent label,
     /// with ancestors revealed for context.
     pub fn visible_rows_agent_filtered(&self) -> Vec<Row> {
-        self.build_rows(RowFilter::Agents)
+        self.build_rows(RowFilter {
+            query: "",
+            scope: RowScope::Agents,
+        })
     }
 
     fn build_rows(&self, filter: RowFilter) -> Vec<Row> {
         // Lowercase the query once; every node comparison below runs
         // against already-lowercased search text (review feedback: the
         // per-node to_lowercase() allocations add up on every keystroke).
-        let lowered_query = match filter {
-            RowFilter::Text(query) => query.to_lowercase(),
-            _ => String::new(),
-        };
+        let lowered_query = filter.query.to_lowercase();
         let query = lowered_query.as_str();
         let mut rows = Vec::new();
         for (ws_idx, ws) in self.workspaces.iter().enumerate() {
@@ -327,61 +383,41 @@ impl Tree {
                     .flat_map(|tab| tab.panes.iter())
                     .map(|pane| pane.info.agent_status),
             );
-            let ws_search = format!("{} {}", ws.label, ws_activity).to_lowercase();
+            let ws_search = workspace_search_text(ws.info.as_ref(), &ws.label, &ws_activity);
 
             let tab_states: Vec<(bool, Vec<bool>)> = ws
                 .tabs
                 .iter()
                 .zip(&tab_metas)
-                .map(|(tab, (_, tab_search))| match filter {
-                    RowFilter::None => (
-                        !single_tab && ws.expanded,
-                        tab.panes
-                            .iter()
-                            .map(|_| ws.expanded && (single_tab || tab.expanded))
-                            .collect(),
-                    ),
-                    RowFilter::Text(_) => {
-                        // A tab that matches on its own shows all of its
-                        // panes, like the built-in (navigator_child_rows:
-                        // `Text if tab_matches => pane_rows`).
-                        let tab_matches =
-                            !single_tab && crate::search::lowered_query_matches(tab_search, query);
-                        let pane_shown: Vec<bool> = tab
-                            .panes
-                            .iter()
-                            .map(|pane| {
-                                tab_matches
-                                    || crate::search::lowered_query_matches(
-                                        &pane_search_text(&pane.info),
-                                        query,
-                                    )
-                            })
-                            .collect();
-                        let tab_shown =
-                            tab_matches || (!single_tab && pane_shown.iter().any(|&shown| shown));
-                        (tab_shown, pane_shown)
+                .map(|(tab, (_, tab_search))| {
+                    if filter.is_expansion() {
+                        return (
+                            !single_tab && ws.expanded,
+                            tab.panes
+                                .iter()
+                                .map(|_| ws.expanded && (single_tab || tab.expanded))
+                                .collect(),
+                        );
                     }
-                    RowFilter::State(status) => {
-                        let pane_shown: Vec<bool> = tab
-                            .panes
-                            .iter()
-                            .map(|pane| pane.info.agent_status == status)
-                            .collect();
-                        let tab_shown = !single_tab
-                            && (tab.info.agent_status == status
-                                || pane_shown.iter().any(|&shown| shown));
-                        (tab_shown, pane_shown)
-                    }
-                    RowFilter::Agents => {
-                        let pane_shown: Vec<bool> = tab
-                            .panes
-                            .iter()
-                            .map(|pane| pane_is_agent(&pane.info))
-                            .collect();
-                        let tab_shown = !single_tab && pane_shown.iter().any(|&shown| shown);
-                        (tab_shown, pane_shown)
-                    }
+                    // A tab that matches on its own reveals matching panes
+                    // within the active scope, preserving the built-in text
+                    // search behavior while allowing state/agent filters to
+                    // narrow the result.
+                    let tab_matches = !single_tab
+                        && scope_matches_tab(filter.scope, &tab.info)
+                        && text_matches(tab_search, query);
+                    let pane_shown: Vec<bool> = tab
+                        .panes
+                        .iter()
+                        .map(|pane| {
+                            scope_matches_pane(filter.scope, &pane.info)
+                                && (tab_matches
+                                    || text_matches(&pane_search_text(&pane.info), query))
+                        })
+                        .collect();
+                    let tab_shown =
+                        tab_matches || (!single_tab && pane_shown.iter().any(|&shown| shown));
+                    (tab_shown, pane_shown)
                 })
                 .collect();
             let any_child_shown = tab_states
@@ -393,12 +429,12 @@ impl Tree {
                 .map(|i| i.agent_status)
                 .unwrap_or(AgentStatus::Unknown);
             let ws_shown = match filter {
-                RowFilter::None => true,
-                RowFilter::Text(_) => {
-                    crate::search::lowered_query_matches(&ws_search, query) || any_child_shown
+                _ if filter.is_expansion() => true,
+                _ => {
+                    (scope_matches_workspace(filter.scope, ws_status_agg)
+                        && text_matches(&ws_search, query))
+                        || any_child_shown
                 }
-                RowFilter::State(status) => ws_status_agg == status || any_child_shown,
-                RowFilter::Agents => any_child_shown,
             };
             if !ws_shown {
                 continue;
@@ -428,7 +464,7 @@ impl Tree {
                     !ws.tabs.is_empty()
                 },
                 expanded: match filter {
-                    RowFilter::None => ws.expanded,
+                    _ if filter.is_expansion() => ws.expanded,
                     _ => any_child_shown,
                 },
                 pane_count: ws_pane_count,
@@ -489,7 +525,7 @@ impl Tree {
                         title: format!("{}/{}", ws.label, tab.info.label),
                         expandable: !tab.panes.is_empty(),
                         expanded: match filter {
-                            RowFilter::None => tab.expanded,
+                            _ if filter.is_expansion() => tab.expanded,
                             _ => any_pane_shown,
                         },
                         pane_count: tab.info.pane_count,
@@ -783,9 +819,80 @@ fn pane_is_agent(info: &PaneInfo) -> bool {
     info.agent.is_some() || info.display_agent.is_some()
 }
 
-/// What text search sees for a pane: label + meta, like the built-in.
+fn text_matches(lowered_search_text: &str, lowered_query: &str) -> bool {
+    lowered_query.is_empty()
+        || crate::search::lowered_query_matches(lowered_search_text, lowered_query)
+}
+
+fn scope_matches_workspace(scope: RowScope, status: AgentStatus) -> bool {
+    match scope {
+        RowScope::All => true,
+        RowScope::State(wanted) => status == wanted,
+        RowScope::Agents => false,
+    }
+}
+
+fn scope_matches_tab(scope: RowScope, info: &TabInfo) -> bool {
+    match scope {
+        RowScope::All => true,
+        RowScope::State(wanted) => info.agent_status == wanted,
+        RowScope::Agents => false,
+    }
+}
+
+fn scope_matches_pane(scope: RowScope, info: &PaneInfo) -> bool {
+    match scope {
+        RowScope::All => true,
+        RowScope::State(wanted) => info.agent_status == wanted,
+        RowScope::Agents => pane_is_agent(info),
+    }
+}
+
+fn workspace_search_text(info: Option<&WorkspaceInfo>, label: &str, activity: &str) -> String {
+    let mut parts = vec![label, activity];
+    if let Some(info) = info {
+        if let Some(branch) = info.branch.as_deref() {
+            parts.push(branch);
+        }
+        if let Some(worktree) = info.worktree.as_ref() {
+            parts.push(&worktree.repo_name);
+            parts.push(&worktree.checkout_path);
+        }
+    }
+    search_parts(parts)
+}
+
+/// What text search sees for a pane: visible label, meta, command-like
+/// title, directories, and resolved branch.
 fn pane_search_text(info: &PaneInfo) -> String {
-    format!("{} {}", pane_label(info), pane_meta(info)).to_lowercase()
+    let label = pane_label(info);
+    let meta = pane_meta(info);
+    let mut parts = vec![label.as_str(), meta.as_str()];
+    for part in [
+        info.title.as_deref(),
+        info.label.as_deref(),
+        info.agent.as_deref(),
+        info.display_agent.as_deref(),
+        info.custom_status.as_deref(),
+        info.cwd.as_deref(),
+        info.foreground_cwd.as_deref(),
+        info.branch.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        parts.push(part);
+    }
+    search_parts(parts)
+}
+
+fn search_parts(parts: Vec<&str>) -> String {
+    parts
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Pane display label, mirroring the built-in goto's chain
@@ -1204,6 +1311,65 @@ mod tests {
     }
 
     #[test]
+    fn filter_matches_pane_command_title_and_branch_metadata() {
+        let mut command_pane = pane("w1:p1", "w1:t1", "w1", true, Some("claude"));
+        command_pane.label = Some("builder".to_string());
+        command_pane.title = Some("cargo test -p picker".to_string());
+        command_pane.branch = Some("feature/search-idx".to_string());
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "alpha", true)],
+            vec![tab("w1:t1", "w1", 1, "a-one", true, 2)],
+            vec![command_pane, pane("w1:p2", "w1:t1", "w1", false, None)],
+            InitialExpansion::None,
+        );
+
+        assert_eq!(
+            labels(&tree.visible_rows_filtered("ctpp")),
+            vec!["alpha", "cargo test -p picker"],
+            "fuzzy search sees the pane command/title"
+        );
+        assert_eq!(
+            labels(&tree.visible_rows_filtered("fsidx")),
+            vec!["alpha", "cargo test -p picker"],
+            "fuzzy search sees pane branch metadata"
+        );
+    }
+
+    #[test]
+    fn filter_matches_workspace_worktree_branch() {
+        let mut ws = workspace("w1", 1, "alpha", true);
+        ws.branch = Some("fix/config-search".to_string());
+        ws.worktree = Some(crate::herdr_client::WorkspaceWorktree {
+            repo_name: "herdr-configurable-picker".to_string(),
+            checkout_path: "/home/u/src/herdr-configurable-picker".to_string(),
+            is_linked_worktree: true,
+        });
+        let tree = Tree::build(
+            vec![ws, workspace("w2", 2, "beta", false)],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true, 1),
+                tab("w2:t1", "w2", 1, "b-one", true, 1),
+            ],
+            vec![
+                pane("w1:p1", "w1:t1", "w1", true, None),
+                pane("w2:p1", "w2:t1", "w2", false, None),
+            ],
+            InitialExpansion::None,
+        );
+
+        assert_eq!(
+            labels(&tree.visible_rows_filtered("fcsearch")),
+            vec!["alpha"],
+            "fuzzy search sees workspace branch metadata"
+        );
+        assert_eq!(
+            labels(&tree.visible_rows_filtered("hcfgpick")),
+            vec!["alpha"],
+            "fuzzy search sees workspace repo metadata"
+        );
+    }
+
+    #[test]
     fn filter_is_case_insensitive_and_does_not_reveal_children_of_matches() {
         let tree = fixture(InitialExpansion::All);
 
@@ -1282,6 +1448,48 @@ mod tests {
             labels(&rows),
             vec!["alpha", "a-one", "claude", "a-two", "Copilot"]
         );
+    }
+
+    #[test]
+    fn agent_filter_can_be_narrowed_by_search() {
+        let mut display_only = pane("w1:p3", "w1:t2", "w1", false, None);
+        display_only.display_agent = Some("Copilot".to_string());
+        display_only.title = Some("review tmp output".to_string());
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "alpha", true)],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true, 2),
+                tab("w1:t2", "w1", 2, "a-two", false, 1),
+            ],
+            vec![
+                pane("w1:p1", "w1:t1", "w1", true, Some("claude")),
+                pane("w1:p2", "w1:t1", "w1", false, None),
+                display_only,
+            ],
+            InitialExpansion::None,
+        );
+
+        let rows = tree.visible_rows_filtered_scoped("tmp", None, true);
+        assert_eq!(labels(&rows), vec!["alpha", "a-two", "review tmp output"]);
+    }
+
+    #[test]
+    fn state_filter_can_be_narrowed_by_search() {
+        let mut blocked = pane("w1:p1", "w1:t1", "w1", true, Some("claude"));
+        blocked.agent_status = AgentStatus::Blocked;
+        blocked.title = Some("fix config loader".to_string());
+        let mut other_blocked = pane("w1:p2", "w1:t1", "w1", false, Some("codex"));
+        other_blocked.agent_status = AgentStatus::Blocked;
+        other_blocked.title = Some("write docs".to_string());
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "alpha", true)],
+            vec![tab("w1:t1", "w1", 1, "a-one", true, 2)],
+            vec![blocked, other_blocked],
+            InitialExpansion::None,
+        );
+
+        let rows = tree.visible_rows_filtered_scoped("config", Some(AgentStatus::Blocked), false);
+        assert_eq!(labels(&rows), vec!["alpha", "fix config loader"]);
     }
 
     #[test]

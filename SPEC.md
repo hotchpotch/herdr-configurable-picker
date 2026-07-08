@@ -25,7 +25,7 @@ This plugin provides a **drop-in alternative** bound to a separate key (recommen
 
 - **Type**: herdr plugin (v1 manifest / `herdr-plugin.toml`).
 - **Language**: Rust. Rationale: `ratatui` gives us the same TUI stack herdr itself uses; single static binary; no runtime dependencies; matches the herdr project's toolchain so contributors don't context-switch.
-- **Install**: `herdr plugin install yoshiori/herdr-configurable-picker`.
+- **Install**: `herdr plugin install hotchpotch/herdr-configurable-picker`.
 - **License**: MIT.
 
 ## Manifest (`herdr-plugin.toml`)
@@ -102,8 +102,8 @@ search_start = ["/", "ctrl+s"]
 search_clear = ["ctrl+u"]     # only active while search mode is focused
 search_exit  = ["esc"]        # returns to normal mode, keeps current filter result
 
-# State filters (the built-in's b/w/i/d/a): show only nodes whose agents
-# are in the given state. Mutually exclusive with text search.
+# State filters (b/w/i/d/r/a): show only nodes whose agents are in the
+# given state, or only panes with agents. Can be combined with text search.
 filter_blocked = ["b", "ctrl+b"]
 filter_working = ["w", "ctrl+w"]
 filter_idle    = ["i", "tab"]
@@ -182,14 +182,15 @@ manifest pane title) is the frame.
 │→     ○ pane 1                                               shell │ branch  main           │
 │                                                                   │                        │
 ├───────────────────────────────────────────────────────────────────┴────────────────────────┤
-│ ↑/↓ move   → expand   ← collapse   / search   b/w/i/d/a states   r agents   enter accept   esc cancel │
+│ ↑/↓ move   → expand   ← collapse   / search   b/w/i/d/r/a states   enter accept   esc cancel │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Header** (always on, like the built-in's): the `/` search prompt (dim
-  placeholder until used) or the active state-filter chip with the state's
-  own icon, plus the total pane count right-aligned; a rule separates it
-  from the tree.
+  placeholder until used) or the active state/agent-filter chip with the
+  state's own icon; when search is combined with a filter, the query appears
+  beside the chip. The total pane count is right-aligned; a rule separates
+  it from the tree.
 - **Tree**: workspaces open with `▾`/`▸` and are bold; children hang off
   tree-command guide rails (`├──`, `└──`, `│` continuations). Single-tab
   workspaces list their panes directly (the tab level is skipped, like the
@@ -275,13 +276,12 @@ herdr answers a request it cannot parse (e.g. an unknown method) with an `invali
      bindings like `ctrl+n`/`ctrl+p`, arrows, and `enter` keep moving,
      accepting, and cancelling without leaving the prompt (chords do not
      fire inside search mode).
-- **Matching**: like the built-in's `text_matches_query` — the query is split on whitespace and every word must appear (case-insensitive) in the node's *search text*, which is the label plus the meta column (`claude · idle`, `2 panes · 1 working`, …). So `/blocked` finds stuck agents and `/pick work` intersects. A node is visible if it or any descendant matches; ancestors of a match stay visible so context is preserved. Children of a matching branch are *not* revealed — jump to the branch itself. Collapse state is ignored while a filter is active; the user's expansion state is untouched and returns when the query clears.
+- **Matching**: the query is split on whitespace and every word must match (case-insensitive) the node's *search text*. A word matches as either a substring or, for 4+ character words, a fuzzy subsequence, so `/ctpp` can match a pane title like `cargo test -p picker`, and `/fcsearch` can match a branch like `fix/config-search`. Shorter words such as `/tmp` are substring-only to avoid broad fuzzy matches. Search text includes labels, meta (`claude · idle`, `2 panes · 1 working`, …), pane title/command-like presentation, cwd/foreground cwd, resolved git branch, and workspace worktree repo/path. `/blocked` finds stuck agents and `/pick work` intersects. A node is visible if it or any descendant matches; ancestors of a match stay visible so context is preserved. Children of a matching branch are *not* revealed — jump to the branch itself. Collapse state is ignored while a filter is active; the user's expansion state is untouched and returns when the query clears.
 - **Match count**: shown at the right edge of the prompt line.
-- **Filters**: `filter_blocked`/`_working`/`_idle`/`_done` (default `b`/`w`/`i`/`d`) show only nodes whose (aggregate) agent state matches, with the same ancestor-reveal rules. `filter_agents` (default `r`) shows only panes with `agent`/`display_agent`, keeping workspace/tab ancestors for context. `filter_clear` (default `a`) drops the filter. Text search and filters are mutually exclusive — starting one drops the other, and mode/filter keys keep working even when the current filter matches nothing.
+- **Filters**: `filter_blocked`/`_working`/`_idle`/`_done` (default `b`/`w`/`i`/`d`) show only nodes whose (aggregate) agent state matches, with the same ancestor-reveal rules. `filter_agents` (default `r`) shows only panes with `agent`/`display_agent`, keeping workspace/tab ancestors for context. These filters can be combined with text search: starting `/` keeps the active state/agent scope and narrows inside it. `filter_clear` (default `a`) drops both the text query and the active row filter, and mode/filter keys keep working even when the current filter matches nothing.
 - Cursor auto-moves to the first visible *match* (not a context-only ancestor) after each keystroke.
 - `search_exit` returns to normal mode; the filter result stays. `search_clear` empties the query.
 - No current-tab marker while a filter is active (the point of filtering is going somewhere else).
-- Optional fuzzy mode (`search_mode = "fuzzy"`) deferred.
 
 ## Behavior details
 
@@ -313,7 +313,7 @@ herdr-configurable-picker/
     ├── host_config.rs        # host config.toml readers (theme accent, mouse)
     ├── app.rs                # pure input state machine (keys/mouse -> Outcome)
     ├── tree.rs               # workspace/tab/pane tree, expansion, visible rows
-    ├── search.rs             # multi-word AND matching
+    ├── search.rs             # multi-word AND fuzzy matching
     ├── git.rs                # .git/HEAD branch resolution (no subprocess)
     ├── icons.rs              # status/agent icon sets (nerd/ascii/emoji)
     └── ui.rs                 # ratatui layout, header, detail panel, footer

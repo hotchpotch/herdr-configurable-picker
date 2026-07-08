@@ -2,6 +2,40 @@
 
 Tree-based goto picker for [herdr](https://herdr.dev) with **Emacs-style movement** and **IME-safe keys** out of the box — and every single binding is yours to change.
 
+## Fork note
+
+This repository is a fork of [yoshiori/herdr-configurable-picker](https://github.com/yoshiori/herdr-configurable-picker/). This fork keeps the upstream picker behavior and adds local-use improvements on top of it.
+
+Fork-specific additions:
+
+- **Agent-only filter**: show only panes that have an `agent` or `display_agent`, while keeping workspace/tab ancestors visible for context.
+- **IME-safe binding for the agent filter**: default bindings are `r` and `ctrl+r`, matching the existing `b`/`w`/`i`/`d` state filters.
+- **Fork install workflow**: install this fork from GitHub with Herdr's normal plugin installer.
+
+Agent-only filter configuration:
+
+```toml
+[keys]
+filter_agents = ["r", "ctrl+r"]
+filter_clear  = ["a", "backspace", "ctrl+a"]
+```
+
+If you already have a generated plugin config, find its directory and add the key to `config.toml` there:
+
+```bash
+herdr plugin config-dir yoshiori.herdr-configurable-picker
+```
+
+For use of this fork from GitHub:
+
+```bash
+herdr plugin uninstall yoshiori.herdr-configurable-picker  # for a GitHub-installed copy
+herdr plugin install hotchpotch/herdr-configurable-picker
+herdr server reload-config
+```
+
+The GitHub install source is this fork, but the manifest plugin id remains `yoshiori.herdr-configurable-picker`; keep using that id for `plugin_action`, `plugin config-dir`, and uninstall/reload commands.
+
 ## Motivation
 
 The built-in herdr goto (`prefix+g`, `Mode::Navigator` internally) has hard-coded navigation keys, and that bites twice:
@@ -23,8 +57,8 @@ This plugin binds to a separate key and fixes both by default — `ctrl+n`/`ctrl
 - **IME-safe defaults**: every letter action has an alias that survives an active IME — `ctrl+b`/`ctrl+w`/`ctrl+d`/`ctrl+r`/`ctrl+a` for the filters, `ctrl+s` for search, `tab` for the idle filter (`ctrl+i` *is* tab to a terminal).
 - **All keys user-configurable**: multiple keys per action, chords like `g g`, everything in a plugin-local config file.
 - Tree of `workspace → tab → pane` with expand / collapse per branch (`initial_expansion` configurable) and tree-command style guide rails.
-- `/` search over labels *and* meta (agent names, states, pane counts) with multi-word AND — `/pick work` intersects; `ctrl+n`/`ctrl+p`/arrows/`enter` keep working inside the prompt.
-- Filters (`b`/`w`/`i`/`d`, `r`, rebindable): show only blocked / working / idle / done agents, or only panes with agents; `a` clears.
+- `/` fuzzy search over labels, meta, command-like pane titles, directories, and git branches with multi-word AND — `/pick work` intersects, while 4+ character loose patterns like `/ctpp` can match `cargo test -p picker`; shorter queries such as `/tmp` stay substring-only to avoid broad fuzzy matches; `ctrl+n`/`ctrl+p`/arrows/`enter` keep working inside the prompt.
+- Filters (`b`/`w`/`i`/`d`, `r`, rebindable): show only blocked / working / idle / done agents, or only panes with agents; they can be combined with `/` search to narrow inside the active filter; `a` clears.
 - Live view: statuses, labels, and panes refresh about once a second while open, with an animated spinner for working agents and per-branch activity summaries (`2 working · 1 blocked`).
 - Jumps to any node: workspaces, tabs, and panes — including agentless panes, via the socket-only `pane.focus` (with a `tab.focus` fallback for herdr ≤ 0.7.1).
 - A detail panel shows the selected node's id, agent, status (with its colored icon and the working spinner), cwd, and — inside a git repository — the current branch, read straight from `.git/HEAD` (no `git` subprocess; linked worktrees and detached HEADs included). Worktree workspaces also show their repo and branch.
@@ -44,12 +78,12 @@ This plugin binds to a separate key and fixes both by default — `ctrl+n`/`ctrl
 | Jump to a pane | via its tab | any pane directly (incl. agentless, via socket `pane.focus`) |
 | Search keys | fixed | rebindable (`search_start`/`search_clear`/`search_exit`) |
 | Rendering | true floating modal | full-canvas pane with a detail panel |
-| Ships with herdr | yes | `herdr plugin install yoshiori/herdr-configurable-picker` |
+| Ships with herdr | yes | `herdr plugin install hotchpotch/herdr-configurable-picker` |
 
 ## Install
 
 ```bash
-herdr plugin install yoshiori/herdr-configurable-picker
+herdr plugin install hotchpotch/herdr-configurable-picker
 ```
 
 Then bind a key in your herdr config. The plugin ships an `open` action (herdr keybindings can trigger plugin actions, not panes) that opens the picker overlay:
