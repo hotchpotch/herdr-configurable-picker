@@ -34,6 +34,8 @@ pub enum Action {
     FilterWorking,
     FilterIdle,
     FilterDone,
+    /// Normal mode: show only panes with an agent label.
+    FilterAgents,
     /// Normal mode: drop the state filter.
     FilterClear,
 }

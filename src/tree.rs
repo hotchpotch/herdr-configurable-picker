@@ -103,6 +103,8 @@ enum RowFilter<'a> {
     Text(&'a str),
     /// Only nodes whose (aggregate) agent status equals this.
     State(AgentStatus),
+    /// Only panes with an agent label; ancestors stay visible as context.
+    Agents,
 }
 
 #[derive(Debug)]
@@ -276,6 +278,12 @@ impl Tree {
         self.build_rows(RowFilter::State(status))
     }
 
+    /// Agent-filter view: only panes with an agent or display-agent label,
+    /// with ancestors revealed for context.
+    pub fn visible_rows_agent_filtered(&self) -> Vec<Row> {
+        self.build_rows(RowFilter::Agents)
+    }
+
     fn build_rows(&self, filter: RowFilter) -> Vec<Row> {
         // Lowercase the query once; every node comparison below runs
         // against already-lowercased search text (review feedback: the
@@ -365,6 +373,15 @@ impl Tree {
                                 || pane_shown.iter().any(|&shown| shown));
                         (tab_shown, pane_shown)
                     }
+                    RowFilter::Agents => {
+                        let pane_shown: Vec<bool> = tab
+                            .panes
+                            .iter()
+                            .map(|pane| pane_is_agent(&pane.info))
+                            .collect();
+                        let tab_shown = !single_tab && pane_shown.iter().any(|&shown| shown);
+                        (tab_shown, pane_shown)
+                    }
                 })
                 .collect();
             let any_child_shown = tab_states
@@ -381,6 +398,7 @@ impl Tree {
                     crate::search::lowered_query_matches(&ws_search, query) || any_child_shown
                 }
                 RowFilter::State(status) => ws_status_agg == status || any_child_shown,
+                RowFilter::Agents => any_child_shown,
             };
             if !ws_shown {
                 continue;
@@ -759,6 +777,10 @@ fn pane_meta(info: &PaneInfo) -> String {
         }
         None => "shell".to_string(),
     }
+}
+
+fn pane_is_agent(info: &PaneInfo) -> bool {
+    info.agent.is_some() || info.display_agent.is_some()
 }
 
 /// What text search sees for a pane: label + meta, like the built-in.
@@ -1230,6 +1252,36 @@ mod tests {
         assert!(tree
             .visible_rows_state_filtered(AgentStatus::Working)
             .is_empty());
+    }
+
+    #[test]
+    fn agent_filter_shows_agent_panes_with_ancestors() {
+        let mut display_only = pane("w1:p3", "w1:t2", "w1", false, None);
+        display_only.display_agent = Some("Copilot".to_string());
+        let tree = Tree::build(
+            vec![
+                workspace("w1", 1, "alpha", true),
+                workspace("w2", 2, "beta", false),
+            ],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true, 2),
+                tab("w1:t2", "w1", 2, "a-two", false, 1),
+                tab("w2:t1", "w2", 1, "b-one", true, 1),
+            ],
+            vec![
+                pane("w1:p1", "w1:t1", "w1", true, Some("claude")),
+                pane("w1:p2", "w1:t1", "w1", false, None),
+                display_only,
+                pane("w2:p1", "w2:t1", "w2", false, None),
+            ],
+            InitialExpansion::None, // collapse must not matter
+        );
+
+        let rows = tree.visible_rows_agent_filtered();
+        assert_eq!(
+            labels(&rows),
+            vec!["alpha", "a-one", "claude", "a-two", "Copilot"]
+        );
     }
 
     #[test]

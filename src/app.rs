@@ -77,6 +77,9 @@ pub struct App {
     /// Active state filter (the built-in's b/w/i/d keys). Mutually
     /// exclusive with the text query: setting one drops the other.
     pub state_filter: Option<AgentStatus>,
+    /// Active agent-only filter: show panes with `agent`/`display_agent`.
+    /// Mutually exclusive with text search and state filters.
+    pub agent_filter: bool,
     /// True when the snapshot itself had nothing to show (as opposed to a
     /// filter that currently matches nothing).
     tree_is_empty: bool,
@@ -106,6 +109,7 @@ impl App {
             mode: Mode::Normal,
             query: String::new(),
             state_filter: None,
+            agent_filter: false,
             tree_is_empty,
             prompt_row: 0,
             list_rect: (0, 0, 0, 0),
@@ -274,7 +278,7 @@ impl App {
             Action::Cancel => {
                 // Two-stage, like the built-in: a leftover query or state
                 // filter is cleared first; only a clean esc closes.
-                if self.query.is_empty() && self.state_filter.is_none() {
+                if self.query.is_empty() && self.state_filter.is_none() && !self.agent_filter {
                     return Outcome::Cancel;
                 }
                 self.clear_filters();
@@ -283,6 +287,7 @@ impl App {
             Action::SearchStart => {
                 // Text search and state filter are mutually exclusive.
                 self.state_filter = None;
+                self.agent_filter = false;
                 self.mode = Mode::Search;
                 self.refresh_filter();
                 return Outcome::Continue;
@@ -301,6 +306,10 @@ impl App {
             }
             Action::FilterDone => {
                 self.set_state_filter(AgentStatus::Done);
+                return Outcome::Continue;
+            }
+            Action::FilterAgents => {
+                self.set_agent_filter();
                 return Outcome::Continue;
             }
             Action::FilterClear => {
@@ -361,6 +370,7 @@ impl App {
             | Action::FilterWorking
             | Action::FilterIdle
             | Action::FilterDone
+            | Action::FilterAgents
             | Action::FilterClear
             | Action::SearchClear
             | Action::SearchExit => unreachable!("handled before the row-dependent actions"),
@@ -374,6 +384,7 @@ impl App {
     fn clear_filters(&mut self) {
         self.query.clear();
         self.state_filter = None;
+        self.agent_filter = false;
         self.refresh_rows();
         self.cursor = self
             .rows
@@ -384,6 +395,7 @@ impl App {
 
     fn set_state_filter(&mut self, status: AgentStatus) {
         self.state_filter = Some(status);
+        self.agent_filter = false;
         self.query.clear();
         self.refresh_rows();
         // Land on the first node actually in that state, not an ancestor
@@ -395,11 +407,29 @@ impl App {
             .unwrap_or(0);
     }
 
-    /// Rows under the active filter (state filter wins; else text query).
+    fn set_agent_filter(&mut self) {
+        self.state_filter = None;
+        self.agent_filter = true;
+        self.query.clear();
+        self.refresh_rows();
+        // Land on the first actual agent pane, not an ancestor shown for
+        // context.
+        self.cursor = self
+            .rows
+            .iter()
+            .position(|row| row.kind == RowKind::Pane && row.agent.is_some())
+            .unwrap_or(0);
+    }
+
+    /// Rows under the active filter (agent/state filters win; else text query).
     fn refresh_rows(&mut self) {
-        self.rows = match self.state_filter {
-            Some(status) => self.tree.visible_rows_state_filtered(status),
-            None => self.tree.visible_rows_filtered(&self.query),
+        self.rows = if self.agent_filter {
+            self.tree.visible_rows_agent_filtered()
+        } else {
+            match self.state_filter {
+                Some(status) => self.tree.visible_rows_state_filtered(status),
+                None => self.tree.visible_rows_filtered(&self.query),
+            }
         };
     }
 
@@ -948,6 +978,43 @@ mod tests {
     }
 
     #[test]
+    fn agent_filter_shows_only_agent_panes_with_context() {
+        let keymaps = default_keymaps();
+        let mut agent = pane("w2:p1", "w2:t1", "w2", false);
+        agent.agent = Some("claude".to_string());
+        let tree = Tree::build(
+            vec![
+                workspace("w1", 1, "alpha", true),
+                workspace("w2", 2, "beta", false),
+            ],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true),
+                tab("w2:t1", "w2", 1, "b-one", true),
+            ],
+            vec![pane("w1:p1", "w1:t1", "w1", true), agent],
+            InitialExpansion::All,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+
+        press(&mut app, &keymaps, "r");
+        assert!(app.agent_filter);
+        assert_eq!(app.state_filter, None);
+        let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["beta", "claude"], "agent chain only");
+        assert_eq!(cursor_label(&app), "claude", "cursor on the agent pane");
+
+        press(&mut app, &keymaps, "a");
+        assert!(!app.agent_filter);
+        assert_eq!(app.rows().len(), 4, "full tree restored");
+
+        press(&mut app, &keymaps, "r");
+        press(&mut app, &keymaps, "/");
+        assert!(!app.agent_filter, "search drops the agent filter");
+        assert_eq!(app.mode, Mode::Search);
+        assert_eq!(app.rows().len(), 4);
+    }
+
+    #[test]
     fn esc_and_backspace_clear_the_state_filter_before_closing() {
         let keymaps = default_keymaps();
         let mut app = app();
@@ -965,6 +1032,33 @@ mod tests {
         assert_eq!(press(&mut app, &keymaps, "esc"), Outcome::Continue);
         assert_eq!(app.state_filter, None);
         assert_eq!(app.rows().len(), 7);
+
+        assert_eq!(press(&mut app, &keymaps, "esc"), Outcome::Cancel);
+    }
+
+    #[test]
+    fn esc_and_backspace_clear_the_agent_filter_before_closing() {
+        let keymaps = default_keymaps();
+        let mut agent = pane("w1:p1", "w1:t1", "w1", true);
+        agent.agent = Some("claude".to_string());
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "alpha", true)],
+            vec![tab("w1:t1", "w1", 1, "a-one", true)],
+            vec![agent, pane("w1:p2", "w1:t1", "w1", false)],
+            InitialExpansion::All,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+
+        press(&mut app, &keymaps, "r");
+        assert!(app.agent_filter);
+        press(&mut app, &keymaps, "backspace");
+        assert!(!app.agent_filter);
+        assert_eq!(app.rows().len(), 3);
+
+        press(&mut app, &keymaps, "r");
+        assert_eq!(press(&mut app, &keymaps, "esc"), Outcome::Continue);
+        assert!(!app.agent_filter);
+        assert_eq!(app.rows().len(), 3);
 
         assert_eq!(press(&mut app, &keymaps, "esc"), Outcome::Cancel);
     }

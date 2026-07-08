@@ -60,6 +60,7 @@ filter_blocked = ["b", "ctrl+b"]
 filter_working = ["w", "ctrl+w"]
 filter_idle    = ["i", "tab"]
 filter_done    = ["d", "ctrl+d"]
+filter_agents  = ["r", "ctrl+r"]
 filter_clear   = ["a", "backspace", "ctrl+a"]
 
 [display]
@@ -120,6 +121,7 @@ pub struct KeysConfig {
     pub filter_working: Vec<String>,
     pub filter_idle: Vec<String>,
     pub filter_done: Vec<String>,
+    pub filter_agents: Vec<String>,
     pub filter_clear: Vec<String>,
 }
 
@@ -194,6 +196,7 @@ impl Default for KeysConfig {
             filter_working: keys(&["w", "ctrl+w"]),
             filter_idle: keys(&["i", "tab"]),
             filter_done: keys(&["d", "ctrl+d"]),
+            filter_agents: keys(&["r", "ctrl+r"]),
             filter_clear: keys(&["a", "backspace", "ctrl+a"]),
         }
     }
@@ -243,6 +246,7 @@ impl KeysConfig {
             (Action::FilterWorking, self.filter_working.clone()),
             (Action::FilterIdle, self.filter_idle.clone()),
             (Action::FilterDone, self.filter_done.clone()),
+            (Action::FilterAgents, self.filter_agents.clone()),
             (Action::FilterClear, self.filter_clear.clone()),
         ]
     }
@@ -309,6 +313,7 @@ mod tests {
         assert_eq!(config.keys.expand, vec!["right", "l"]);
         assert_eq!(config.keys.collapse, vec!["left", "h"]);
         assert_eq!(config.keys.toggle, vec!["space"]);
+        assert_eq!(config.keys.filter_agents, vec!["r", "ctrl+r"]);
         assert_eq!(config.keys.accept, vec!["enter"]);
         assert_eq!(config.keys.cancel, vec!["esc", "ctrl+c", "ctrl+g"]);
         assert_eq!(config.display.icon_set, "nerd");
@@ -375,6 +380,7 @@ mod tests {
                 Action::FilterWorking,
                 Action::FilterIdle,
                 Action::FilterDone,
+                Action::FilterAgents,
                 Action::FilterClear,
             ]
         );

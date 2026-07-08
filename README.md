@@ -20,11 +20,11 @@ This plugin binds to a separate key and fixes both by default — `ctrl+n`/`ctrl
 ## Features
 
 - **Emacs-style movement everywhere**: `ctrl+n`/`ctrl+p` move, `ctrl+v` pages — in the list *and* inside the search prompt, not search-only like the built-in. (`j`/`k` and arrows work too.)
-- **IME-safe defaults**: every letter action has an alias that survives an active IME — `ctrl+b`/`ctrl+w`/`ctrl+d`/`ctrl+a` for the state filters, `ctrl+s` for search, `tab` for the idle filter (`ctrl+i` *is* tab to a terminal).
+- **IME-safe defaults**: every letter action has an alias that survives an active IME — `ctrl+b`/`ctrl+w`/`ctrl+d`/`ctrl+r`/`ctrl+a` for the filters, `ctrl+s` for search, `tab` for the idle filter (`ctrl+i` *is* tab to a terminal).
 - **All keys user-configurable**: multiple keys per action, chords like `g g`, everything in a plugin-local config file.
 - Tree of `workspace → tab → pane` with expand / collapse per branch (`initial_expansion` configurable) and tree-command style guide rails.
 - `/` search over labels *and* meta (agent names, states, pane counts) with multi-word AND — `/pick work` intersects; `ctrl+n`/`ctrl+p`/arrows/`enter` keep working inside the prompt.
-- State filters (`b`/`w`/`i`/`d`, rebindable): show only blocked / working / idle / done agents; `a` clears.
+- Filters (`b`/`w`/`i`/`d`, `r`, rebindable): show only blocked / working / idle / done agents, or only panes with agents; `a` clears.
 - Live view: statuses, labels, and panes refresh about once a second while open, with an animated spinner for working agents and per-branch activity summaries (`2 working · 1 blocked`).
 - Jumps to any node: workspaces, tabs, and panes — including agentless panes, via the socket-only `pane.focus` (with a `tab.focus` fallback for herdr ≤ 0.7.1).
 - A detail panel shows the selected node's id, agent, status (with its colored icon and the working spinner), cwd, and — inside a git repository — the current branch, read straight from `.git/HEAD` (no `git` subprocess; linked worktrees and detached HEADs included). Worktree workspaces also show their repo and branch.
@@ -90,6 +90,7 @@ filter_blocked = ["b", "ctrl+b"]
 filter_working = ["w", "ctrl+w"]
 filter_idle    = ["i", "tab"]
 filter_done    = ["d", "ctrl+d"]
+filter_agents  = ["r", "ctrl+r"]
 filter_clear   = ["a", "backspace", "ctrl+a"]
 ```
 

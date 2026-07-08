@@ -56,6 +56,9 @@ impl FooterHints {
         if !filter_keys.is_empty() {
             entries.push((filter_keys.join("/"), "states".to_string()));
         }
+        if let Some(key) = keymap.first_binding_label(Action::FilterAgents) {
+            entries.push((key, "agents".to_string()));
+        }
         for (action, label) in [(Action::Accept, "accept"), (Action::Cancel, "cancel")] {
             if let Some(key) = keymap.first_binding_label(action) {
                 entries.push((key, label.to_string()));
@@ -278,6 +281,20 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
                 style.add_modifier(Modifier::BOLD),
             ));
             frame.render_widget(Paragraph::new(Line::from(spans)), prompt_area);
+        } else if app.agent_filter {
+            let mut spans = vec![Span::styled(" / ", dim_style(view))];
+            if let Some(icon) = view.agent_icon_set.and_then(|set| set.agent_icon()) {
+                spans.push(Span::styled(
+                    icon,
+                    Style::new().add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(
+                "agents",
+                Style::new().add_modifier(Modifier::BOLD),
+            ));
+            frame.render_widget(Paragraph::new(Line::from(spans)), prompt_area);
         } else {
             // The trailing bar marks the prompt as focused (typing goes
             // here); the query is the content, the "/" just furniture.
@@ -320,7 +337,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, hints: &FooterHints, view: &ViewOp
     app.list_rect = (list_area.x, list_area.y, list_area.width, list_area.height);
 
     if app.rows().is_empty() {
-        let placeholder = if app.query.is_empty() && app.state_filter.is_none() {
+        let placeholder = if app.query.is_empty() && app.state_filter.is_none() && !app.agent_filter
+        {
             "No workspaces found."
         } else {
             "No matches."
@@ -1532,7 +1550,7 @@ mod tests {
     #[test]
     fn footer_keys_are_bold_and_labels_dim() {
         let mut app = sample_app();
-        let terminal = render(80, 24, &mut app);
+        let terminal = render(100, 24, &mut app);
         let buffer = terminal.backend().buffer();
         let lines = buffer_lines(&terminal);
         let y = lines
@@ -1571,6 +1589,29 @@ mod tests {
         // The chip carries the state's own icon, like the built-in's
         // push_state_chip — for working that is the spinner (tick 0).
         assert!(screen.contains("⠋ working"), "filter line:\n{screen}");
+        let lines = buffer_lines(&terminal);
+        assert!(
+            lines[0].trim_end().ends_with("3 panes"),
+            "pane total at the right edge: {:?}",
+            lines[0]
+        );
+    }
+
+    #[test]
+    fn agent_filter_line_shows_agents_and_count() {
+        use crate::keymap::{parse_key_spec, Keymaps};
+        let keys = KeysConfig::default();
+        let (normal, _) = Keymap::from_bindings(&keys.to_bindings());
+        let (search, _) = Keymap::from_bindings(&keys.to_search_bindings());
+        let keymaps = Keymaps { normal, search };
+
+        let mut app = sample_app();
+        let key = parse_key_spec("r").unwrap().0[0];
+        app.handle_key(&keymaps, key);
+        let terminal = render(80, 24, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(screen.contains("agents"), "filter line:\n{screen}");
         let lines = buffer_lines(&terminal);
         assert!(
             lines[0].trim_end().ends_with("3 panes"),

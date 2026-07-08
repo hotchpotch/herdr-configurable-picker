@@ -13,7 +13,7 @@ This plugin provides a **drop-in alternative** bound to a separate key (recommen
 
 1. **No external dependencies** at runtime — one static binary, no `fzf`, no `jq`. TUI rendered by the plugin itself.
 2. **Tree structure** — workspace / tab / pane hierarchy with collapse/expand, matching the built-in goto's information model.
-3. **Fully user-configurable keybindings** — every action (`up` / `down` / `expand` / `collapse` / `accept` / `cancel` / `search` / `clear` / `page_up` / `page_down` / `top` / `bottom` / the state filters) is bindable in the plugin's own config file, with Emacs-style and IME-safe defaults.
+3. **Fully user-configurable keybindings** — every action (`up` / `down` / `expand` / `collapse` / `accept` / `cancel` / `search` / `clear` / `page_up` / `page_down` / `top` / `bottom` / the filters) is bindable in the plugin's own config file, with Emacs-style and IME-safe defaults.
 
 ## Non-goals
 
@@ -108,6 +108,7 @@ filter_blocked = ["b", "ctrl+b"]
 filter_working = ["w", "ctrl+w"]
 filter_idle    = ["i", "tab"]
 filter_done    = ["d", "ctrl+d"]
+filter_agents  = ["r", "ctrl+r"]
 filter_clear   = ["a", "backspace", "ctrl+a"]
 
 [display]
@@ -181,7 +182,7 @@ manifest pane title) is the frame.
 │→     ○ pane 1                                               shell │ branch  main           │
 │                                                                   │                        │
 ├───────────────────────────────────────────────────────────────────┴────────────────────────┤
-│ ↑/↓ move   → expand   ← collapse   / search   b/w/i/d/a states   enter accept   esc cancel │
+│ ↑/↓ move   → expand   ← collapse   / search   b/w/i/d/a states   r agents   enter accept   esc cancel │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -276,7 +277,7 @@ herdr answers a request it cannot parse (e.g. an unknown method) with an `invali
      fire inside search mode).
 - **Matching**: like the built-in's `text_matches_query` — the query is split on whitespace and every word must appear (case-insensitive) in the node's *search text*, which is the label plus the meta column (`claude · idle`, `2 panes · 1 working`, …). So `/blocked` finds stuck agents and `/pick work` intersects. A node is visible if it or any descendant matches; ancestors of a match stay visible so context is preserved. Children of a matching branch are *not* revealed — jump to the branch itself. Collapse state is ignored while a filter is active; the user's expansion state is untouched and returns when the query clears.
 - **Match count**: shown at the right edge of the prompt line.
-- **State filters**: `filter_blocked`/`_working`/`_idle`/`_done` (default `b`/`w`/`i`/`d`) show only nodes whose (aggregate) agent state matches, with the same ancestor-reveal rules; `filter_clear` (default `a`) drops the filter. Text search and state filters are mutually exclusive — starting one drops the other, and mode/filter keys keep working even when the current filter matches nothing.
+- **Filters**: `filter_blocked`/`_working`/`_idle`/`_done` (default `b`/`w`/`i`/`d`) show only nodes whose (aggregate) agent state matches, with the same ancestor-reveal rules. `filter_agents` (default `r`) shows only panes with `agent`/`display_agent`, keeping workspace/tab ancestors for context. `filter_clear` (default `a`) drops the filter. Text search and filters are mutually exclusive — starting one drops the other, and mode/filter keys keep working even when the current filter matches nothing.
 - Cursor auto-moves to the first visible *match* (not a context-only ancestor) after each keystroke.
 - `search_exit` returns to normal mode; the filter result stays. `search_clear` empties the query.
 - No current-tab marker while a filter is active (the point of filtering is going somewhere else).
