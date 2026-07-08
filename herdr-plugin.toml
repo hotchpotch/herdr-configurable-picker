@@ -1,4 +1,4 @@
-id = "yoshiori.herdr-configurable-picker"
+id = "hotchpotch.herdr-configurable-picker"
 name = "herdr-configurable-picker"
 version = "1.0.0"
 min_herdr_version = "0.7.0"
@@ -16,7 +16,7 @@ command = ["cargo", "build", "--release", "--locked"]
 id = "open"
 title = "Open goto picker"
 description = "Open the configurable goto picker in an overlay pane"
-command = ["sh", "-c", "exec \"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin yoshiori.herdr-configurable-picker --entrypoint picker"]
+command = ["sh", "-c", "exec \"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin hotchpotch.herdr-configurable-picker --entrypoint picker"]
 
 [[panes]]
 id = "picker"

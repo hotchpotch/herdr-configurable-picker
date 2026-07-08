@@ -75,6 +75,9 @@ pub struct Row {
     pub focus_target: FocusTarget,
     /// Key/value pairs for the detail panel, in display order.
     pub detail: Vec<(&'static str, String)>,
+    /// Pane rows: recent terminal output shown under the detail key/value
+    /// section.
+    pub output_preview: Vec<String>,
     /// Pane rows: working directory, for the optional show_cwd column.
     pub cwd: Option<String>,
     /// Pane rows: user/plugin-set status text; wins over the state name.
@@ -500,6 +503,7 @@ impl Tree {
                     }
                     detail
                 },
+                output_preview: Vec::new(),
                 cwd: None,
                 custom_status: None,
                 last_child: false,
@@ -540,6 +544,7 @@ impl Tree {
                             ("panes", tab.info.pane_count.to_string()),
                             ("status", tab.info.agent_status.name().to_string()),
                         ],
+                        output_preview: Vec::new(),
                         cwd: None,
                         custom_status: None,
                         last_child: false,
@@ -612,6 +617,7 @@ impl Tree {
                             tab_id: pane.info.tab_id.clone(),
                         },
                         detail,
+                        output_preview: pane.info.output_preview.clone(),
                         cwd: pane.info.cwd.clone(),
                         custom_status: pane.info.custom_status.clone(),
                         last_child: false,
@@ -969,6 +975,7 @@ mod tests {
             title: None,
             custom_status: None,
             terminal_id: format!("term_{id}"),
+            output_preview: Vec::new(),
             branch: None,
         }
     }

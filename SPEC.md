@@ -31,7 +31,7 @@ This plugin provides a **drop-in alternative** bound to a separate key (recommen
 ## Manifest (`herdr-plugin.toml`)
 
 ```toml
-id = "yoshiori.herdr-configurable-picker"
+id = "hotchpotch.herdr-configurable-picker"
 name = "herdr-configurable-picker"
 version = "1.0.0"
 min_herdr_version = "0.7.0"
@@ -45,7 +45,7 @@ command = ["cargo", "build", "--release", "--locked"]
 id = "open"
 title = "Open goto picker"
 description = "Open the configurable goto picker in an overlay pane"
-command = ["sh", "-c", "exec \"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin yoshiori.herdr-configurable-picker --entrypoint picker"]
+command = ["sh", "-c", "exec \"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin hotchpotch.herdr-configurable-picker --entrypoint picker"]
 
 [[panes]]
 id = "picker"
@@ -70,7 +70,7 @@ Verified against herdr source: `[[keys.command]]` supports `type = "shell" | "pa
 [[keys.command]]
 key = "prefix+ctrl+g"
 type = "plugin_action"
-command = "yoshiori.herdr-configurable-picker.open"
+command = "hotchpotch.herdr-configurable-picker.open"
 description = "configurable goto picker"
 ```
 
@@ -116,6 +116,9 @@ show_pane_count   = true
 show_agent_status = true
 show_agent_icon   = true      # 󰚩 in front of agent meta,  for shells
 show_cwd          = false     # off by default; opt in for wide terminals
+preview_lines                 = 8  # recent output lines in the detail panel; 0 disables
+preview_agent_skip_tail_lines = 4  # hide agent input/status lines after reading preview + skip
+preview_shell_skip_tail_lines = 1  # hide shell input lines after reading preview + skip
 
 # Matches the built-in's agent icons (blocked/working/done/idle/unknown):
 # "nerd" -> ◉ ⠋(spinner) ● ✓ ○   "ascii" -> ! |(spinner) * v o   "emoji" -> 🔴🟡🔵✅⚪
@@ -284,6 +287,7 @@ herdr answers a request it cannot parse (e.g. an unknown method) with an `invali
 - **Match count**: shown at the right edge of the prompt line.
 - **Filters**: `filter_blocked`/`_working`/`_idle`/`_done` (default `b`/`w`/`i`/`d`) show only nodes whose (aggregate) agent state matches, with the same ancestor-reveal rules. `filter_agents` (default `r`) shows only panes with `agent`/`display_agent`, keeping workspace/tab ancestors for context. These filters can be combined with text search: starting `/` keeps the active state/agent scope and narrows inside it. `filter_clear` (default `a`) drops both the text query and the active row filter, and mode/filter keys keep working even when the current filter matches nothing.
 - **Initial view**: `[behavior] initial_view` applies one of those row filters as soon as the picker opens. `all` keeps the normal tree, `agents` starts agent-only, and `blocked`/`working`/`idle`/`done` start in the matching state view.
+- **Output preview**: `[display] preview_lines` reads recent unwrapped pane output via `pane.read` and shows it under the detail panel for pane rows. To avoid input/status UI at the bottom of panes, the plugin reads `preview_lines + preview_agent_skip_tail_lines` for agent panes and `preview_lines + preview_shell_skip_tail_lines` for other panes, then drops the configured tail before rendering. `0` disables preview fetching.
 - Cursor auto-moves to the first visible *match* (not a context-only ancestor) after each keystroke.
 - `search_exit` returns to normal mode; the filter result stays. `search_clear` empties the query.
 - No current-tab marker while a filter is active (the point of filtering is going somewhere else).

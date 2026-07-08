@@ -105,7 +105,17 @@ fn main() -> ExitCode {
         Err(e) => return fail_visibly(&format!("{e:#}")),
     };
     let context_pane_id = context_focused_pane_id();
-    let tree = match fetch_tree(&mut client, context_pane_id.as_deref(), initial_expansion) {
+    let output_preview = OutputPreviewConfig {
+        lines: config.display.preview_lines,
+        agent_skip_tail_lines: config.display.preview_agent_skip_tail_lines,
+        shell_skip_tail_lines: config.display.preview_shell_skip_tail_lines,
+    };
+    let tree = match fetch_tree(
+        &mut client,
+        context_pane_id.as_deref(),
+        initial_expansion,
+        output_preview,
+    ) {
         Ok(tree) => tree,
         Err(e) => return fail_visibly(&format!("{e:#}")),
     };
@@ -146,9 +156,12 @@ fn main() -> ExitCode {
                 if app.tick % REFRESH_EVERY_TICKS == 0 {
                     // A failed refresh (herdr restarting?) keeps the last
                     // good snapshot; the next interval retries anyway.
-                    if let Ok(tree) =
-                        fetch_tree(&mut client, context_pane_id.as_deref(), initial_expansion)
-                    {
+                    if let Ok(tree) = fetch_tree(
+                        &mut client,
+                        context_pane_id.as_deref(),
+                        initial_expansion,
+                        output_preview,
+                    ) {
                         app.replace_tree(tree);
                     }
                 }
@@ -220,19 +233,61 @@ fn main() -> ExitCode {
 
 /// One full snapshot: the three lists, normalized (our own overlay pane
 /// dropped), joined into a tree.
+#[derive(Debug, Clone, Copy)]
+struct OutputPreviewConfig {
+    lines: usize,
+    agent_skip_tail_lines: usize,
+    shell_skip_tail_lines: usize,
+}
+
 fn fetch_tree(
     client: &mut SocketClient,
     context_pane_id: Option<&str>,
     initial_expansion: InitialExpansion,
+    output_preview: OutputPreviewConfig,
 ) -> anyhow::Result<Tree> {
     let mut workspaces = client.list_workspaces()?;
     let mut tabs = client.list_tabs()?;
     let mut panes = client.list_panes()?;
     tree::drop_own_overlay_pane(&mut workspaces, &mut tabs, &mut panes, context_pane_id);
+    if output_preview.lines > 0 {
+        for pane in &mut panes {
+            let skip_tail = if pane.agent.is_some() || pane.display_agent.is_some() {
+                output_preview.agent_skip_tail_lines
+            } else {
+                output_preview.shell_skip_tail_lines
+            };
+            let read_lines = output_preview.lines.saturating_add(skip_tail);
+            pane.output_preview = client
+                .read_pane_recent(&pane.pane_id, read_lines)
+                .map(|text| recent_preview_lines(&text, output_preview.lines, skip_tail))
+                .unwrap_or_default();
+        }
+    }
     // Branch names never come over the socket; they resolve locally from
     // each pane's cwd (.git/HEAD).
     git::annotate(&mut workspaces, &mut panes);
     Ok(Tree::build(workspaces, tabs, panes, initial_expansion))
+}
+
+fn recent_preview_lines(text: &str, limit: usize, skip_tail: usize) -> Vec<String> {
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_end();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .collect();
+    let keep_len = lines.len().saturating_sub(skip_tail);
+    lines.truncate(keep_len);
+    lines
+        .into_iter()
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 /// The pane the user came from, out of HERDR_PLUGIN_CONTEXT_JSON. Needed to
@@ -273,4 +328,22 @@ fn fail_visibly(message: &str) -> ExitCode {
     report_warnings(&[message.to_string()]);
     std::thread::sleep(std::time::Duration::from_secs(3));
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_preview_lines_keep_last_non_empty_lines() {
+        assert_eq!(
+            recent_preview_lines("one\n\n two \nthree\nfour\ninput\nstatus\n", 3, 2),
+            vec![" two".to_string(), "three".to_string(), "four".to_string()]
+        );
+    }
+
+    #[test]
+    fn recent_preview_lines_handles_skip_tail_larger_than_output() {
+        assert!(recent_preview_lines("prompt\nstatus\n", 8, 4).is_empty());
+    }
 }

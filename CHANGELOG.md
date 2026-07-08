@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Fork manifest id `hotchpotch.herdr-configurable-picker`, so config and
+  plugin commands no longer use the upstream `yoshiori.*` id.
 - Agent-only filter (`filter_agents`, default `r`/`ctrl+r`) that shows
   panes with `agent`/`display_agent` and keeps their workspace/tab context.
 - Fuzzy `/` search over labels, meta, pane titles, cwd/foreground cwd, and
@@ -16,6 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   footer groups the agent-only `r` binding with the other state filters.
 - Configurable `[behavior] initial_view` for opening directly into `all`,
   `agents`, or a state-filtered view.
+- Detail-panel recent output preview for panes, configurable with
+  `[display] preview_lines` and agent/shell-specific tail skipping.
 
 ## [1.0.0] - 2026-07-05
 

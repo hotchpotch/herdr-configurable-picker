@@ -564,6 +564,20 @@ fn render_detail(frame: &mut Frame, app: &App, area: ratatui::layout::Rect, view
         };
         lines.push(Line::from(vec![key_span, Span::raw(value)]));
     }
+    if !row.output_preview.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("output", dim_style(view).add_modifier(Modifier::BOLD)),
+        ]));
+        let output_width = (inner.width as usize).saturating_sub(2).max(1);
+        for line in &row.output_preview {
+            lines.push(Line::from(vec![
+                Span::styled(" ", dim_style(view)),
+                Span::styled(middle_elide(line, output_width), dim_style(view)),
+            ]));
+        }
+    }
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -840,6 +854,7 @@ mod tests {
             title: None,
             custom_status: None,
             terminal_id: format!("term_{id}"),
+            output_preview: Vec::new(),
             branch: None,
         }
     }
@@ -1091,6 +1106,28 @@ mod tests {
             screen.contains("~/src/repo"),
             "cwd shortened via view.home:\n{screen}"
         );
+    }
+
+    #[test]
+    fn detail_panel_shows_recent_output_for_panes() {
+        let mut preview = pane("w1:p1", "w1:t1", "w1", true, Some("claude"));
+        preview.output_preview = vec![
+            "running cargo test".to_string(),
+            "test result: ok".to_string(),
+        ];
+        let tree = Tree::build(
+            vec![workspace("w1", 1, "picker", true)],
+            vec![tab("w1:t1", "w1", 1, "main", true)],
+            vec![preview],
+            InitialExpansion::All,
+        );
+        let mut app = App::new(tree, EnterOnBranch::Jump);
+        let terminal = render(100, 24, &mut app);
+        let screen = screen(&terminal);
+
+        assert!(screen.contains("output"), "screen:\n{screen}");
+        assert!(screen.contains("running cargo test"), "screen:\n{screen}");
+        assert!(screen.contains("test result: ok"), "screen:\n{screen}");
     }
 
     #[test]

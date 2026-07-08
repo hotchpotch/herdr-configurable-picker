@@ -105,6 +105,9 @@ pub struct PaneInfo {
     #[serde(default)]
     pub custom_status: Option<String>,
     pub terminal_id: String,
+    /// Not on the wire: recent pane output read separately from pane.read.
+    #[serde(skip)]
+    pub output_preview: Vec<String>,
     /// Not on the wire: resolved locally from the pane's cwd.
     #[serde(skip)]
     pub branch: Option<String>,
@@ -116,6 +119,7 @@ pub trait HerdrApi {
     fn list_workspaces(&mut self) -> Result<Vec<WorkspaceInfo>>;
     fn list_tabs(&mut self) -> Result<Vec<TabInfo>>;
     fn list_panes(&mut self) -> Result<Vec<PaneInfo>>;
+    fn read_pane_recent(&mut self, pane_id: &str, lines: usize) -> Result<String>;
     fn focus_workspace(&mut self, workspace_id: &str) -> Result<()>;
     fn focus_tab(&mut self, tab_id: &str) -> Result<()>;
     /// Socket-only method (no CLI equivalent); works for agentless panes too.
@@ -233,6 +237,27 @@ impl HerdrApi for SocketClient {
     fn list_panes(&mut self) -> Result<Vec<PaneInfo>> {
         let result = self.call("pane.list", json!({}))?;
         extract_payload(&result, "pane_list", "panes")
+    }
+
+    fn read_pane_recent(&mut self, pane_id: &str, lines: usize) -> Result<String> {
+        let result = self.call(
+            "pane.read",
+            json!({
+                "pane_id": pane_id,
+                "source": "recent_unwrapped",
+                "lines": lines,
+                "format": "text",
+                "strip_ansi": true,
+            }),
+        )?;
+        let actual_type = result["type"].as_str().unwrap_or("<missing>");
+        if actual_type != "pane_read" {
+            bail!("expected a pane_read result from herdr, got {actual_type}");
+        }
+        Ok(result["read"]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string())
     }
 
     fn focus_workspace(&mut self, workspace_id: &str) -> Result<()> {
@@ -598,6 +623,32 @@ mod tests {
         let request: Value = serde_json::from_str(&received[0]).unwrap();
         assert_eq!(request["method"], "tab.focus");
         assert_eq!(request["params"], json!({"tab_id": "w1:t2"}));
+    }
+
+    #[test]
+    fn read_pane_recent_sends_pane_read_request() {
+        let (path, server) = spawn_fake_server(vec![
+            r#"{"id":"1","result":{"type":"pane_read","read":{"pane_id":"w1:p2","workspace_id":"w1","tab_id":"w1:t1","source":"recent_unwrapped","format":"text","text":"first\nsecond\n","revision":7,"truncated":false}}}"#.to_string(),
+        ]);
+
+        let mut client = SocketClient::connect(&path).unwrap();
+        let text = client.read_pane_recent("w1:p2", 6).unwrap();
+
+        assert_eq!(text, "first\nsecond\n");
+        drop(client);
+        let received = server.join().unwrap();
+        let request: Value = serde_json::from_str(&received[0]).unwrap();
+        assert_eq!(request["method"], "pane.read");
+        assert_eq!(
+            request["params"],
+            json!({
+                "pane_id": "w1:p2",
+                "source": "recent_unwrapped",
+                "lines": 6,
+                "format": "text",
+                "strip_ansi": true,
+            })
+        );
     }
 
     #[test]

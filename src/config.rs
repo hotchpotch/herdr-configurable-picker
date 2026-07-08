@@ -71,6 +71,11 @@ show_agent_status = true
 # agentless panes get a terminal icon. No-op with icon_set = "ascii".
 show_agent_icon   = true
 show_cwd          = false
+# Recent output lines shown at the bottom of the detail panel for pane rows.
+# Set 0 to disable.
+preview_lines                 = 8
+preview_agent_skip_tail_lines = 4
+preview_shell_skip_tail_lines = 1
 
 # "nerd" | "ascii" | "emoji"
 icon_set = "nerd"
@@ -137,6 +142,9 @@ pub struct DisplayConfig {
     pub show_agent_status: bool,
     pub show_agent_icon: bool,
     pub show_cwd: bool,
+    pub preview_lines: usize,
+    pub preview_agent_skip_tail_lines: usize,
+    pub preview_shell_skip_tail_lines: usize,
     pub icon_set: String,
     pub accent: String,
 }
@@ -215,6 +223,9 @@ impl Default for DisplayConfig {
             show_agent_status: true,
             show_agent_icon: true,
             show_cwd: false,
+            preview_lines: 8,
+            preview_agent_skip_tail_lines: 4,
+            preview_shell_skip_tail_lines: 1,
             icon_set: "nerd".to_string(),
             accent: "auto".to_string(),
         }
@@ -326,6 +337,9 @@ mod tests {
         assert_eq!(config.display.icon_set, "nerd");
         assert!(config.display.show_pane_count);
         assert!(!config.display.show_cwd);
+        assert_eq!(config.display.preview_lines, 8);
+        assert_eq!(config.display.preview_agent_skip_tail_lines, 4);
+        assert_eq!(config.display.preview_shell_skip_tail_lines, 1);
         assert_eq!(config.behavior.enter_on_branch, "jump");
         assert_eq!(config.behavior.initial_expansion, "all");
         assert_eq!(config.behavior.initial_view, "all");

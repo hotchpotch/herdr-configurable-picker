@@ -20,8 +20,10 @@ Recent fork changes:
 - State filters and the agent-only filter can be combined with `/` search, so you can press `r`, then `/tmp`, to search only agent panes.
 - The footer groups `r` with the other filters as `b/w/i/d/r/a states`.
 - `[behavior] initial_view` can open the picker directly in `agents`, `blocked`, `working`, `idle`, or `done`.
+- The detail panel can show recent pane output, with agent/shell-specific tail skipping to hide input and status UI lines.
+- The fork uses its own manifest id, `hotchpotch.herdr-configurable-picker`.
 
-Agent-only filter and initial-view configuration:
+Agent-only filter, initial-view, and output-preview configuration:
 
 ```toml
 [keys]
@@ -36,18 +38,18 @@ initial_view = "agents"
 If you already have a generated plugin config, find its directory and add the key to `config.toml` there:
 
 ```bash
-herdr plugin config-dir yoshiori.herdr-configurable-picker
+herdr plugin config-dir hotchpotch.herdr-configurable-picker
 ```
 
 For use of this fork from GitHub:
 
 ```bash
-herdr plugin uninstall yoshiori.herdr-configurable-picker  # for a GitHub-installed copy
+herdr plugin uninstall yoshiori.herdr-configurable-picker  # if an old upstream-id copy is installed
 herdr plugin install hotchpotch/herdr-configurable-picker
 herdr server reload-config
 ```
 
-The GitHub install source is this fork, but the manifest plugin id remains `yoshiori.herdr-configurable-picker`; keep using that id for `plugin_action`, `plugin config-dir`, and uninstall/reload commands.
+The manifest plugin id for this fork is `hotchpotch.herdr-configurable-picker`; use that id for `plugin_action`, `plugin config-dir`, and local plugin commands.
 
 ## Motivation
 
@@ -74,7 +76,7 @@ This plugin binds to a separate key and fixes both by default — `ctrl+n`/`ctrl
 - Filters (`b`/`w`/`i`/`d`, `r`, rebindable): show only blocked / working / idle / done agents, or only panes with agents; they can be combined with `/` search to narrow inside the active filter; `a` clears.
 - Live view: statuses, labels, and panes refresh about once a second while open, with an animated spinner for working agents and per-branch activity summaries (`2 working · 1 blocked`).
 - Jumps to any node: workspaces, tabs, and panes — including agentless panes, via the socket-only `pane.focus` (with a `tab.focus` fallback for herdr ≤ 0.7.1).
-- A detail panel shows the selected node's id, agent, status (with its colored icon and the working spinner), cwd, and — inside a git repository — the current branch, read straight from `.git/HEAD` (no `git` subprocess; linked worktrees and detached HEADs included). Worktree workspaces also show their repo and branch.
+- A detail panel shows the selected node's id, agent, status (with its colored icon and the working spinner), cwd, recent terminal output, and — inside a git repository — the current branch, read straight from `.git/HEAD` (no `git` subprocess; linked worktrees and detached HEADs included). Worktree workspaces also show their repo and branch.
 - Status icons in three sets (`nerd` / `ascii` / `emoji`), status colors, `NO_COLOR` support, and `[display]` toggles for icons, pane counts, and cwd.
 - Agent icons in the meta column and detail panel (`󰚩 claude · idle`,  for plain shells; 🤖/🐚 with `icon_set = "emoji"`), toggleable via `show_agent_icon`.
 - No external runtime dependencies (single Rust binary; TUI via [`ratatui`](https://ratatui.rs/)).
@@ -105,7 +107,7 @@ Then bind a key in your herdr config. The plugin ships an `open` action (herdr k
 [[keys.command]]
 key = "prefix+ctrl+g"
 type = "plugin_action"
-command = "yoshiori.herdr-configurable-picker.open"
+command = "hotchpotch.herdr-configurable-picker.open"
 description = "configurable goto picker"
 ```
 
@@ -144,6 +146,11 @@ filter_clear   = ["a", "backspace", "ctrl+a"]
 initial_expansion = "all"   # "all" | "current_workspace" | "none"
 initial_view = "all"        # "all" | "agents" | "blocked" | "working" | "idle" | "done"
 enter_on_branch = "jump"    # "jump" | "expand"
+
+[display]
+preview_lines = 8                  # recent output lines in the detail panel; 0 disables
+preview_agent_skip_tail_lines = 4  # hide agent input/status lines after reading preview + skip
+preview_shell_skip_tail_lines = 1  # hide the shell input line after reading preview + skip
 ```
 
 The `ctrl+` aliases are for IME users: with a Japanese (etc.) IME active, bare letter keys get swallowed by the composer while `ctrl+letter` passes through. `filter_idle` binds `tab` because `ctrl+i` *is* tab to a terminal (both send `0x09`) — pressing `ctrl+i` works.

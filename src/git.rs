@@ -179,6 +179,7 @@ mod tests {
             title: None,
             custom_status: None,
             terminal_id: "term".to_string(),
+            output_preview: Vec::new(),
             branch: None,
         };
         let mut ws = WorkspaceInfo {

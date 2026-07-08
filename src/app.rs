@@ -559,6 +559,7 @@ mod tests {
             title: None,
             custom_status: None,
             terminal_id: format!("term_{id}"),
+            output_preview: Vec::new(),
             branch: None,
         }
     }
