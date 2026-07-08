@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use crossterm::event::{self, Event, MouseEventKind};
 
-use app::{App, EnterOnBranch, MouseInput, Outcome};
+use app::{App, EnterOnBranch, InitialView, MouseInput, Outcome};
 use herdr_client::{HerdrApi, SocketClient};
 use keymap::KeyPress;
 use tree::{FocusTarget, InitialExpansion, Tree};
@@ -73,6 +73,13 @@ fn main() -> ExitCode {
             ));
             EnterOnBranch::Jump
         });
+    let initial_view = InitialView::parse(&config.behavior.initial_view).unwrap_or_else(|| {
+        warnings.push(format!(
+            "unknown initial_view {:?}; using \"all\"",
+            config.behavior.initial_view
+        ));
+        InitialView::All
+    });
     // NO_COLOR per https://no-color.org: present and non-empty disables color.
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     // With accent = "auto", follow the herdr theme's accent (read from the
@@ -102,7 +109,10 @@ fn main() -> ExitCode {
         Ok(tree) => tree,
         Err(e) => return fail_visibly(&format!("{e:#}")),
     };
-    let mut app = App::new(tree, enter_on_branch);
+    let mut app = match initial_view {
+        InitialView::All => App::new(tree, enter_on_branch),
+        _ => App::new_with_initial_view(tree, enter_on_branch, initial_view),
+    };
     let hints = ui::FooterHints::from_keymap(&keymaps.normal);
 
     // Poll with a timeout instead of blocking on input: idle timeouts

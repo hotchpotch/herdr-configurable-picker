@@ -130,6 +130,10 @@ accent = "auto"
 [behavior]
 initial_expansion = "all"   # "all" | "current_workspace" | "none"
 
+# Initial row filter when the picker opens:
+# "all" | "agents" | "blocked" | "working" | "idle" | "done"
+initial_view = "all"
+
 # Enter on a branch node (workspace/tab with children):
 # "expand" - toggle the subtree; user then moves to a leaf.
 # "jump"   - jump immediately to the branch's active tab/pane.
@@ -279,6 +283,7 @@ herdr answers a request it cannot parse (e.g. an unknown method) with an `invali
 - **Matching**: the query is split on whitespace and every word must match (case-insensitive) the node's *search text*. A word matches as either a substring or, for 4+ character words, a fuzzy subsequence, so `/ctpp` can match a pane title like `cargo test -p picker`, and `/fcsearch` can match a branch like `fix/config-search`. Shorter words such as `/tmp` are substring-only to avoid broad fuzzy matches. Search text includes labels, meta (`claude · idle`, `2 panes · 1 working`, …), pane title/command-like presentation, cwd/foreground cwd, resolved git branch, and workspace worktree repo/path. `/blocked` finds stuck agents and `/pick work` intersects. A node is visible if it or any descendant matches; ancestors of a match stay visible so context is preserved. Children of a matching branch are *not* revealed — jump to the branch itself. Collapse state is ignored while a filter is active; the user's expansion state is untouched and returns when the query clears.
 - **Match count**: shown at the right edge of the prompt line.
 - **Filters**: `filter_blocked`/`_working`/`_idle`/`_done` (default `b`/`w`/`i`/`d`) show only nodes whose (aggregate) agent state matches, with the same ancestor-reveal rules. `filter_agents` (default `r`) shows only panes with `agent`/`display_agent`, keeping workspace/tab ancestors for context. These filters can be combined with text search: starting `/` keeps the active state/agent scope and narrows inside it. `filter_clear` (default `a`) drops both the text query and the active row filter, and mode/filter keys keep working even when the current filter matches nothing.
+- **Initial view**: `[behavior] initial_view` applies one of those row filters as soon as the picker opens. `all` keeps the normal tree, `agents` starts agent-only, and `blocked`/`working`/`idle`/`done` start in the matching state view.
 - Cursor auto-moves to the first visible *match* (not a context-only ancestor) after each keystroke.
 - `search_exit` returns to normal mode; the filter result stays. `search_clear` empties the query.
 - No current-tab marker while a filter is active (the point of filtering is going somewhere else).

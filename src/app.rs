@@ -34,6 +34,28 @@ impl EnterOnBranch {
     }
 }
 
+/// `[behavior] initial_view` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitialView {
+    All,
+    Agents,
+    State(AgentStatus),
+}
+
+impl InitialView {
+    pub fn parse(text: &str) -> Option<InitialView> {
+        match text {
+            "all" => Some(InitialView::All),
+            "agents" => Some(InitialView::Agents),
+            "blocked" => Some(InitialView::State(AgentStatus::Blocked)),
+            "working" => Some(InitialView::State(AgentStatus::Working)),
+            "idle" => Some(InitialView::State(AgentStatus::Idle)),
+            "done" => Some(InitialView::State(AgentStatus::Done)),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -97,10 +119,18 @@ pub struct App {
 
 impl App {
     pub fn new(tree: Tree, enter_on_branch: EnterOnBranch) -> App {
+        App::new_with_initial_view(tree, enter_on_branch, InitialView::All)
+    }
+
+    pub fn new_with_initial_view(
+        tree: Tree,
+        enter_on_branch: EnterOnBranch,
+        initial_view: InitialView,
+    ) -> App {
         let rows = tree.visible_rows();
         let cursor = tree.initial_cursor();
         let tree_is_empty = rows.is_empty();
-        App {
+        let mut app = App {
             tree,
             rows,
             cursor,
@@ -116,7 +146,9 @@ impl App {
             prompt_row: 0,
             list_rect: (0, 0, 0, 0),
             list_offset: 0,
-        }
+        };
+        app.apply_initial_view(initial_view);
+        app
     }
 
     pub fn rows(&self) -> &[Row] {
@@ -407,6 +439,22 @@ impl App {
         // Land on the first actual agent pane, not an ancestor shown for
         // context.
         self.cursor = self.first_active_match().unwrap_or(0);
+    }
+
+    fn apply_initial_view(&mut self, initial_view: InitialView) {
+        match initial_view {
+            InitialView::All => {}
+            InitialView::Agents => {
+                self.agent_filter = true;
+                self.refresh_rows();
+                self.cursor = self.first_active_match().unwrap_or(0);
+            }
+            InitialView::State(status) => {
+                self.state_filter = Some(status);
+                self.refresh_rows();
+                self.cursor = self.first_active_match().unwrap_or(0);
+            }
+        }
     }
 
     /// Rows under the active search query and optional state/agent scope.
@@ -1089,6 +1137,84 @@ mod tests {
         assert_eq!(EnterOnBranch::parse("jump"), Some(EnterOnBranch::Jump));
         assert_eq!(EnterOnBranch::parse("expand"), Some(EnterOnBranch::Expand));
         assert_eq!(EnterOnBranch::parse("teleport"), None);
+    }
+
+    #[test]
+    fn initial_view_parses_known_values_only() {
+        assert_eq!(InitialView::parse("all"), Some(InitialView::All));
+        assert_eq!(InitialView::parse("agents"), Some(InitialView::Agents));
+        assert_eq!(
+            InitialView::parse("blocked"),
+            Some(InitialView::State(AgentStatus::Blocked))
+        );
+        assert_eq!(
+            InitialView::parse("working"),
+            Some(InitialView::State(AgentStatus::Working))
+        );
+        assert_eq!(
+            InitialView::parse("idle"),
+            Some(InitialView::State(AgentStatus::Idle))
+        );
+        assert_eq!(
+            InitialView::parse("done"),
+            Some(InitialView::State(AgentStatus::Done))
+        );
+        assert_eq!(InitialView::parse("shells"), None);
+    }
+
+    #[test]
+    fn initial_view_can_start_with_agents_only() {
+        let mut agent = pane("w2:p1", "w2:t1", "w2", false);
+        agent.agent = Some("claude".to_string());
+        let tree = Tree::build(
+            vec![
+                workspace("w1", 1, "alpha", true),
+                workspace("w2", 2, "beta", false),
+            ],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true),
+                tab("w2:t1", "w2", 1, "b-one", true),
+            ],
+            vec![pane("w1:p1", "w1:t1", "w1", true), agent],
+            InitialExpansion::All,
+        );
+
+        let app = App::new_with_initial_view(tree, EnterOnBranch::Jump, InitialView::Agents);
+        let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["beta", "claude"]);
+        assert!(app.agent_filter);
+        assert_eq!(app.state_filter, None);
+        assert_eq!(cursor_label(&app), "claude");
+    }
+
+    #[test]
+    fn initial_view_can_start_with_a_state_filter() {
+        let mut working = pane("w2:p1", "w2:t1", "w2", false);
+        working.agent = Some("claude".to_string());
+        working.agent_status = AgentStatus::Working;
+        let tree = Tree::build(
+            vec![
+                workspace("w1", 1, "alpha", true),
+                workspace("w2", 2, "beta", false),
+            ],
+            vec![
+                tab("w1:t1", "w1", 1, "a-one", true),
+                tab("w2:t1", "w2", 1, "b-one", true),
+            ],
+            vec![pane("w1:p1", "w1:t1", "w1", true), working],
+            InitialExpansion::All,
+        );
+
+        let app = App::new_with_initial_view(
+            tree,
+            EnterOnBranch::Jump,
+            InitialView::State(AgentStatus::Working),
+        );
+        let labels: Vec<&str> = app.rows().iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, vec!["beta", "claude"]);
+        assert_eq!(app.state_filter, Some(AgentStatus::Working));
+        assert!(!app.agent_filter);
+        assert_eq!(cursor_label(&app), "claude");
     }
 
     /// The list as drawn: rows at y 2..12, prompt line at y 0.

@@ -84,6 +84,10 @@ accent = "auto"
 # "all" | "current_workspace" | "none"
 initial_expansion = "all"
 
+# Initial row filter when the picker opens.
+# "all" | "agents" | "blocked" | "working" | "idle" | "done"
+initial_view = "all"
+
 # Enter on a branch node: "expand" or "jump"
 enter_on_branch = "jump"
 
@@ -141,6 +145,7 @@ pub struct DisplayConfig {
 #[serde(default)]
 pub struct BehaviorConfig {
     pub initial_expansion: String,
+    pub initial_view: String,
     pub enter_on_branch: String,
     /// Hover, click-to-jump, caret toggling, and wheel scrolling.
     pub mouse: MouseConfig,
@@ -220,6 +225,7 @@ impl Default for BehaviorConfig {
     fn default() -> Self {
         BehaviorConfig {
             initial_expansion: "all".to_string(),
+            initial_view: "all".to_string(),
             enter_on_branch: "jump".to_string(),
             mouse: MouseConfig::Mode("auto".to_string()),
         }
@@ -322,6 +328,7 @@ mod tests {
         assert!(!config.display.show_cwd);
         assert_eq!(config.behavior.enter_on_branch, "jump");
         assert_eq!(config.behavior.initial_expansion, "all");
+        assert_eq!(config.behavior.initial_view, "all");
     }
 
     #[test]

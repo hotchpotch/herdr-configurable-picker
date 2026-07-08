@@ -9,15 +9,28 @@ This repository is a fork of [yoshiori/herdr-configurable-picker](https://github
 Fork-specific additions:
 
 - **Agent-only filter**: show only panes that have an `agent` or `display_agent`, while keeping workspace/tab ancestors visible for context.
+- **Configurable initial view**: start the picker in `all`, `agents`, or a state-filtered view such as `working`.
 - **IME-safe binding for the agent filter**: default bindings are `r` and `ctrl+r`, matching the existing `b`/`w`/`i`/`d` state filters.
 - **Fork install workflow**: install this fork from GitHub with Herdr's normal plugin installer.
 
-Agent-only filter configuration:
+Recent fork changes:
+
+- `/` search now also sees command-like pane titles, cwd/foreground cwd, pane branches, and workspace worktree metadata.
+- Search uses fuzzy subsequence matching for 4+ character words, while short words such as `tmp` remain substring-only to avoid noisy matches.
+- State filters and the agent-only filter can be combined with `/` search, so you can press `r`, then `/tmp`, to search only agent panes.
+- The footer groups `r` with the other filters as `b/w/i/d/r/a states`.
+- `[behavior] initial_view` can open the picker directly in `agents`, `blocked`, `working`, `idle`, or `done`.
+
+Agent-only filter and initial-view configuration:
 
 ```toml
 [keys]
 filter_agents = ["r", "ctrl+r"]
 filter_clear  = ["a", "backspace", "ctrl+a"]
+
+[behavior]
+# "all" | "agents" | "blocked" | "working" | "idle" | "done"
+initial_view = "agents"
 ```
 
 If you already have a generated plugin config, find its directory and add the key to `config.toml` there:
@@ -126,6 +139,11 @@ filter_idle    = ["i", "tab"]
 filter_done    = ["d", "ctrl+d"]
 filter_agents  = ["r", "ctrl+r"]
 filter_clear   = ["a", "backspace", "ctrl+a"]
+
+[behavior]
+initial_expansion = "all"   # "all" | "current_workspace" | "none"
+initial_view = "all"        # "all" | "agents" | "blocked" | "working" | "idle" | "done"
+enter_on_branch = "jump"    # "jump" | "expand"
 ```
 
 The `ctrl+` aliases are for IME users: with a Japanese (etc.) IME active, bare letter keys get swallowed by the composer while `ctrl+letter` passes through. `filter_idle` binds `tab` because `ctrl+i` *is* tab to a terminal (both send `0x09`) — pressing `ctrl+i` works.

@@ -14,6 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   stay substring-only to avoid broad matches such as `/tmp`.
 - State and agent filters can now be combined with `/` search, and the
   footer groups the agent-only `r` binding with the other state filters.
+- Configurable `[behavior] initial_view` for opening directly into `all`,
+  `agents`, or a state-filtered view.
 
 ## [1.0.0] - 2026-07-05
 
